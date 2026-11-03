@@ -15,6 +15,12 @@ A specific version, or uninstall:
 The app installs for the current user and needs no administrator rights. Your
 settings in %APPDATA%\OpenHardwareInfo are kept on update and uninstall.
 
+The optional CPU temperature needs the PawnIO driver and a small service. Add or
+remove them from an elevated PowerShell, which leaves the app itself untouched:
+
+    & ([scriptblock]::Create((irm https://github.com/__REPO__/releases/latest/download/install.ps1))) -InstallCpuTemp
+    & ([scriptblock]::Create((irm https://github.com/__REPO__/releases/latest/download/install.ps1))) -UninstallCpuTemp
+
 This script must keep working in Windows PowerShell 5.1, must never call `exit`
 (that would close the user's shell under `irm | iex`), and must verify checksums
 before installing.
@@ -24,6 +30,10 @@ param(
     [string]$Version = 'latest',
     # Remove the app instead of installing it.
     [switch]$Uninstall,
+    # Install PawnIO, if missing, and the service behind the CPU temperature. Needs elevation.
+    [switch]$InstallCpuTemp,
+    # Remove that service. PawnIO stays, because other programs may rely on it. Needs elevation.
+    [switch]$UninstallCpuTemp,
     # GitHub repository (owner/name) to install from. Filled in when the
     # script is published with a release.
     [string]$Repo = '__REPO__',
@@ -40,7 +50,55 @@ $exeName = 'open-hardware-info.exe'
 $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Open Hardware Info.lnk'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 
+$serviceName = 'OpenHardwareInfoSensor'
+$sensorExeName = 'ohi-sensor.exe'
+# This service runs as SYSTEM, so its binary must never be in a user-writable folder.
+$sensorDir = Join-Path $env:ProgramFiles 'OpenHardwareInfo'
+$pawnIoMinimum = [version]'2.2.0'
+$pawnIoUrl = 'https://github.com/namazso/PawnIO.Setup/releases/download/2.2.0/PawnIO_setup.exe'
+$pawnIoSha256 = '1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'
+
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
+
+function Stop-Sensor {
+    if (-not (Get-Service $serviceName -ErrorAction SilentlyContinue)) { return }
+    Stop-Service $serviceName -Force
+    # The status changes just before the process exits and releases the file.
+    Get-Process ($sensorExeName -replace '\.exe$') -ErrorAction SilentlyContinue | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
+}
+
+function Install-PawnIo([string]$Destination) {
+    $installed = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction SilentlyContinue).DisplayVersion
+    if ($installed -and [version]$installed -ge $pawnIoMinimum) {
+        Write-Step "PawnIO $installed is already installed"
+        return
+    }
+    Write-Step 'Downloading the PawnIO driver'
+    $setup = Join-Path $Destination 'PawnIO_setup.exe'
+    Invoke-WebRequest $pawnIoUrl -OutFile $setup -UseBasicParsing
+    $actual = (Get-FileHash $setup -Algorithm SHA256).Hash
+    if ($actual -ne $pawnIoSha256) { throw 'Checksum mismatch for PawnIO_setup.exe; not installing.' }
+    Write-Step 'Installing the PawnIO driver'
+    $code = (Start-Process $setup -ArgumentList '-install', '-silent' -Wait -PassThru).ExitCode
+    if ($code -eq 3010) {
+        Write-Warning 'Restart Windows to finish installing PawnIO. Until then the temperature shows "--".'
+    } elseif ($code -ne 0) {
+        throw "The PawnIO installer failed with code $code."
+    }
+}
+
+function Register-Sensor([string]$Exe) {
+    if (-not (Get-Service $serviceName -ErrorAction SilentlyContinue)) {
+        # The quotes matter: an unquoted path with spaces lets Windows run C:\Program.exe.
+        New-Service -Name $serviceName -BinaryPathName "`"$Exe`"" -DisplayName 'Open Hardware Info Sensor' `
+            -Description 'Reads the CPU temperature for Open Hardware Info.' -StartupType Automatic | Out-Null
+    }
+    # Drop every privilege the service does not need, and restart it if it crashes.
+    & sc.exe privs $serviceName 'SeCreateGlobalPrivilege/SeChangeNotifyPrivilege' | Out-Null
+    if ($LASTEXITCODE) { throw "Could not restrict the service's privileges (sc.exe code $LASTEXITCODE)." }
+    & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/60000// | Out-Null
+    if ($LASTEXITCODE) { throw "Could not set the service's recovery options (sc.exe code $LASTEXITCODE)." }
+}
 
 # The app must be closed before its file can be replaced or removed. It closes
 # itself when asked, so it can still remove its tray icon.
@@ -77,10 +135,51 @@ function Get-Package([string]$Destination) {
     return $zipPath
 }
 
-$work = Join-Path $env:TEMP ("open-hardware-info-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory $work | Out-Null
+$changesSensor = $InstallCpuTemp -or $UninstallCpuTemp
+if ($changesSensor) {
+    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'The CPU temperature options need an elevated PowerShell (Run as administrator).'
+    }
+}
+
+# Files that will run elevated stay out of %TEMP%, where any unelevated program
+# could replace them after the checksum is verified.
+$workRoot = if ($InstallCpuTemp) { $sensorDir } else { $env:TEMP }
+$work = Join-Path $workRoot ("open-hardware-info-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory $work -Force | Out-Null
 
 try {
+    if ($UninstallCpuTemp) {
+        Write-Step 'Removing the CPU temperature service'
+        Stop-Sensor
+        if (Get-Service $serviceName -ErrorAction SilentlyContinue) {
+            & sc.exe delete $serviceName | Out-Null
+            if ($LASTEXITCODE) { throw "Could not delete the service (sc.exe code $LASTEXITCODE)." }
+        }
+        Remove-Item $sensorDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Step 'The service was removed. PawnIO stays, because other programs may use it; you can remove it from Windows Settings.'
+        return
+    }
+
+    if ($InstallCpuTemp) {
+        Install-PawnIo $work
+        $zipPath = Get-Package $work
+        $files = Join-Path $work 'files'
+        Expand-Archive $zipPath $files
+        $source = Join-Path $files $sensorExeName
+        if (-not (Test-Path $source)) { throw "The package has no $sensorExeName." }
+
+        Write-Step "Installing the service to $sensorDir"
+        Stop-Sensor
+        $sensorExe = Join-Path $sensorDir $sensorExeName
+        Copy-Item $source $sensorExe -Force
+        Register-Sensor $sensorExe
+        Start-Service $serviceName
+        Write-Step 'The service is running. Turn on "Temperatura da CPU" in the app settings.'
+        return
+    }
+
     if ($Uninstall) {
         if (-not (Test-Path $InstallDir)) { throw "Open Hardware Info is not installed in $InstallDir." }
         Write-Step 'Closing the app'
@@ -93,6 +192,9 @@ try {
         Remove-Item $shortcut -ErrorAction SilentlyContinue
         Remove-Item $InstallDir -Recurse -Force
         Write-Step 'Open Hardware Info was removed. Your settings remain in %APPDATA%\OpenHardwareInfo.'
+        if (Get-Service $serviceName -ErrorAction SilentlyContinue) {
+            Write-Warning 'The CPU temperature service is still installed. Remove it from an elevated PowerShell with -UninstallCpuTemp.'
+        }
         return
     }
 
