@@ -11,14 +11,19 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, LPARAM};
 use windows_sys::Win32::Graphics::Gdi::{EnumFontFamiliesExW, GetDC, ReleaseDC, DEFAULT_CHARSET, LOGFONTW, TEXTMETRICW};
+use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::Controls::Dialogs::{ChooseColorW, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
-use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOWNORMAL};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    FindWindowW, MessageBoxW, PostMessageW, SetForegroundWindow, ShowWindow, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_YESNO,
+    SW_RESTORE, SW_SHOWNORMAL,
+};
 
 slint::include_modules!();
 
 pub const WINDOW_TITLE: &str = "Open Hardware Info - Configurações";
+const REPOSITORY: &str = "ndworks-dev/open-hardware-info";
 
 /// Options behind the combo boxes: what each visible entry stores in the file.
 struct Choices {
@@ -287,6 +292,44 @@ fn pick_color(current: &str) -> String {
     }
 }
 
+/// PowerShell for the elevated install: the installer of this exact release,
+/// which verifies what it downloads. The window stays open so the user can read
+/// the result, such as a request to restart Windows.
+fn install_command(version: &str) -> String {
+    format!(
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; \
+         try {{ & ([scriptblock]::Create((irm 'https://github.com/{REPOSITORY}/releases/download/v{version}/install.ps1'))) -InstallCpuTemp -Version {version} }} \
+         catch {{ Write-Host $_ -ForegroundColor Red }} \
+         finally {{ Read-Host 'Press Enter to close' }}"
+    )
+}
+
+/// Asks for consent, then for elevation. This app stays unprivileged and copies
+/// nothing itself: a user-writable executable must never feed a SYSTEM service.
+fn install_sensor(ui: &SettingsWindow) {
+    const USER_CANCELLED_ELEVATION: isize = 5;
+    let text = wide(
+        "Para ler a temperatura da CPU, o Windows precisa do driver de kernel PawnIO e de um pequeno serviço do Open Hardware Info. \
+         A instalação baixa os dois do GitHub e pede permissão de administrador.\n\n\
+         Alguns anti-cheats podem bloquear jogos com o PawnIO instalado.\n\nDeseja instalar?",
+    );
+    let title = wide(WINDOW_TITLE);
+    let owner = unsafe { FindWindowW(null(), title.as_ptr()) };
+    if unsafe { MessageBoxW(owner, text.as_ptr(), title.as_ptr(), MB_YESNO | MB_ICONINFORMATION | MB_DEFBUTTON2) } != IDYES {
+        return;
+    }
+    let mut system = [0u16; 260];
+    let length = unsafe { GetSystemDirectoryW(system.as_mut_ptr(), system.len() as u32) } as usize;
+    let powershell = String::from_utf16_lossy(&system[..length.min(system.len())]) + r"\WindowsPowerShell\v1.0\powershell.exe";
+    let arguments = format!("-NoProfile -ExecutionPolicy Bypass -Command \"{}\"", install_command(env!("CARGO_PKG_VERSION")));
+    let result = unsafe {
+        ShellExecuteW(owner, wide("runas").as_ptr(), wide(&powershell).as_ptr(), wide(&arguments).as_ptr(), null(), SW_SHOWNORMAL) as isize
+    };
+    if result <= 32 && result != USER_CANCELLED_ELEVATION {
+        show_message(ui, "Não foi possível iniciar a instalação.", true);
+    }
+}
+
 pub fn run(path: PathBuf) {
     let title = wide(WINDOW_TITLE);
     unsafe {
@@ -356,6 +399,15 @@ pub fn run(path: PathBuf) {
             }
         }
     });
+    ui.set_sensor_installed(crate::cpu_temp::service_installed());
+    ui.on_install_sensor({
+        let ui = ui.as_weak();
+        move || {
+            if let Some(ui) = ui.upgrade() {
+                install_sensor(&ui);
+            }
+        }
+    });
     ui.on_autostart_toggled({
         let ui = ui.as_weak();
         move |enabled| {
@@ -408,6 +460,7 @@ pub fn run(path: PathBuf) {
         let (ui, state) = (ui.as_weak(), state.clone());
         move || {
             let Some(ui) = ui.upgrade() else { return };
+            ui.set_sensor_installed(crate::cpu_temp::service_installed());
             let Ok(mut state) = state.try_borrow_mut() else { return };
             if stamp_of(&state.path) != state.stamp {
                 reload(&ui, &mut state);
@@ -421,6 +474,15 @@ pub fn run(path: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_command_targets_this_release_and_survives_quoting() {
+        let command = install_command("1.2.3");
+        assert!(command.contains("/releases/download/v1.2.3/install.ps1"));
+        assert!(command.contains("-InstallCpuTemp -Version 1.2.3"));
+        // It travels inside a double-quoted -Command argument.
+        assert!(!command.contains('"'));
+    }
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|v| v.to_string()).collect()
