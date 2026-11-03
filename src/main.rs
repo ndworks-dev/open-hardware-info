@@ -220,7 +220,6 @@ impl App {
                 label: item.label.clone().unwrap_or_else(|| item.metric.default_label().to_owned()),
                 value: item.metric.format(self.snapshot.value(item.metric)),
                 template: item.metric.template(),
-                align_left: matches!(item.metric, Metric::NetDown | Metric::NetUp),
                 color: item.color.as_deref().and_then(|c| Rgba::parse(c).ok()).unwrap_or(default_color),
             })
             .collect();
@@ -240,6 +239,7 @@ impl App {
             font_weight: self.config.font_weight,
             rows: self.config.rows,
             background,
+            separator: default_color,
         };
         let (width, height) = self.renderer.render(&cells, &style, dpi, target.height());
         let tray_left = target.tray_left.map(|left| left - target.rect.left);
