@@ -2,7 +2,7 @@
 
 Monitor de recursos que mostra rede, CPU, memória, GPU e disco direto na barra de tarefas do Windows.
 
-Inspirado no [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor), mas sem driver de kernel: o projeto não usa `WinRing0` nem LibreHardwareMonitor, que é o que faz o Windows Defender bloquear esse tipo de ferramenta. É um único `.exe`, sem DLL própria e sem exigir administrador.
+Inspirado no [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor), mas sem driver próprio: o projeto não usa `WinRing0` nem LibreHardwareMonitor, que é o que faz o Windows Defender bloquear esse tipo de ferramenta. O app é um único `.exe`, sem DLL própria e sem exigir administrador. Só a temperatura da CPU, que é opcional, precisa do driver [PawnIO](https://pawnio.eu) e de um pequeno serviço.
 
 ## Instalação
 
@@ -23,6 +23,21 @@ Para instalar uma versão específica ou desinstalar:
 
 A desinstalação mantém suas configurações em `%APPDATA%\OpenHardwareInfo`.
 
+### Temperatura da CPU (opcional)
+
+Ler esse sensor exige acesso ao kernel, então a temperatura depende de dois componentes que o app não instala sozinho: o driver PawnIO e o serviço `ohi-sensor`, em `%ProgramFiles%\OpenHardwareInfo`. O app continua sem privilégios e só lê o valor que o serviço publica.
+
+Para instalar ou remover, abra o PowerShell como administrador:
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1))) -InstallCpuTemp
+& ([scriptblock]::Create((irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1))) -UninstallCpuTemp
+```
+
+Depois de instalar, ative "Temperatura da CPU" nas configurações. A remoção mantém o PawnIO, porque outros programas podem usá-lo; para tirá-lo, use as configurações do Windows.
+
+Alguns anti-cheats podem bloquear jogos com o PawnIO instalado. Funciona em processadores AMD Ryzen e Intel, e a leitura em Intel ainda não foi testada em hardware real.
+
 ## Como usar
 
 Clique com o botão direito no widget ou no ícone da bandeja para abrir o menu rápido. Para ajustar tudo, escolha "Configurações..." no menu ou dê dois cliques no ícone da bandeja. As mudanças aparecem na barra enquanto você edita.
@@ -35,11 +50,12 @@ Clique com o botão direito no widget ou no ícone da bandeja para abrir o menu 
 | --- | --- |
 | `net_down`, `net_up` | `GetIfTable2`, somando as interfaces físicas ativas |
 | `cpu` | Contador de desempenho `% Processor Utility` (PDH) |
+| `cpu_temp` | Serviço `ohi-sensor`, com o driver PawnIO |
 | `ram` | `GlobalMemoryStatusEx` |
 | `disk` | Contador de desempenho `% Idle Time` (PDH) |
 | `gpu`, `gpu_temp`, `vram` | NVML, instalado com o driver da NVIDIA |
 
-Sem GPU NVIDIA, os itens de GPU mostram `--`. A temperatura da CPU não está disponível, porque ler esse sensor exige um driver de kernel.
+Sem GPU NVIDIA, os itens de GPU mostram `--`. Sem o serviço rodando, `cpu_temp` também mostra `--`.
 
 ## Configuração
 
