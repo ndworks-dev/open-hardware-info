@@ -145,7 +145,7 @@ pub fn counter_delta(previous: &HashMap<u64, (u64, u64)>, current: &[IfCounters]
 fn read_interfaces(adapter: &str) -> Option<Vec<IfCounters>> {
     const HARDWARE_INTERFACE: u8 = 0b01;
     const FILTER_INTERFACE: u8 = 0b10;
-    const OPER_STATUS_UP: i32 = 1;
+    const OPER_STATUS_UP: windows_sys::Win32::NetworkManagement::Ndis::NET_IF_OPER_STATUS = 1;
     const LOOPBACK: u32 = 24;
 
     let needle = adapter.to_lowercase();
@@ -163,7 +163,7 @@ fn read_interfaces(adapter: &str) -> Option<Vec<IfCounters>> {
             // with the same traffic; keeping only the real one avoids counting
             // it multiple times.
             let physical = flags & HARDWARE_INTERFACE != 0 && flags & FILTER_INTERFACE == 0;
-            if !physical || row.OperStatus as i32 != OPER_STATUS_UP || row.Type == LOOPBACK {
+            if !physical || row.OperStatus != OPER_STATUS_UP || row.Type == LOOPBACK {
                 continue;
             }
             if !needle.is_empty() {
@@ -235,7 +235,7 @@ fn read_counter(counter: isize) -> Option<f64> {
     unsafe {
         let mut value: PDH_FMT_COUNTERVALUE = std::mem::zeroed();
         let status = PdhGetFormattedCounterValue(counter as _, PDH_FMT_DOUBLE, std::ptr::null_mut(), &mut value);
-        (status == 0 && value.CStatus == 0).then(|| value.Anonymous.doubleValue)
+        (status == 0 && value.CStatus == 0).then_some(value.Anonymous.doubleValue)
     }
 }
 
@@ -257,16 +257,22 @@ struct NvmlMemory {
 }
 
 type Device = *mut std::ffi::c_void;
+type RawProc = unsafe extern "system" fn() -> isize;
+type InitFn = unsafe extern "system" fn() -> u32;
+type DeviceByIndexFn = unsafe extern "system" fn(u32, *mut Device) -> u32;
+type UtilizationFn = unsafe extern "system" fn(Device, *mut NvmlUtilization) -> u32;
+type TemperatureFn = unsafe extern "system" fn(Device, u32, *mut u32) -> u32;
+type MemoryFn = unsafe extern "system" fn(Device, *mut NvmlMemory) -> u32;
 
 /// NVIDIA's management library, installed with the display driver. Loaded only
 /// from System32 and absent on non-NVIDIA machines, where GPU items show "--".
 struct Nvml {
     module: HMODULE,
     device: Device,
-    utilization: unsafe extern "system" fn(Device, *mut NvmlUtilization) -> u32,
-    temperature: unsafe extern "system" fn(Device, u32, *mut u32) -> u32,
-    memory: unsafe extern "system" fn(Device, *mut NvmlMemory) -> u32,
-    shutdown: unsafe extern "system" fn() -> u32,
+    utilization: UtilizationFn,
+    temperature: TemperatureFn,
+    memory: MemoryFn,
+    shutdown: InitFn,
 }
 
 impl Nvml {
@@ -287,16 +293,16 @@ impl Nvml {
 
     unsafe fn bind(module: HMODULE) -> Option<Nvml> {
         macro_rules! symbol {
-            ($name:literal) => {
-                std::mem::transmute(GetProcAddress(module, concat!($name, "\0").as_ptr())?)
+            ($name:literal, $signature:ty) => {
+                std::mem::transmute::<RawProc, $signature>(GetProcAddress(module, concat!($name, "\0").as_ptr())?)
             };
         }
-        let init: unsafe extern "system" fn() -> u32 = symbol!("nvmlInit_v2");
-        let by_index: unsafe extern "system" fn(u32, *mut Device) -> u32 = symbol!("nvmlDeviceGetHandleByIndex_v2");
-        let utilization = symbol!("nvmlDeviceGetUtilizationRates");
-        let temperature = symbol!("nvmlDeviceGetTemperature");
-        let memory = symbol!("nvmlDeviceGetMemoryInfo");
-        let shutdown: unsafe extern "system" fn() -> u32 = symbol!("nvmlShutdown");
+        let init = symbol!("nvmlInit_v2", InitFn);
+        let by_index = symbol!("nvmlDeviceGetHandleByIndex_v2", DeviceByIndexFn);
+        let utilization = symbol!("nvmlDeviceGetUtilizationRates", UtilizationFn);
+        let temperature = symbol!("nvmlDeviceGetTemperature", TemperatureFn);
+        let memory = symbol!("nvmlDeviceGetMemoryInfo", MemoryFn);
+        let shutdown = symbol!("nvmlShutdown", InitFn);
         if init() != 0 {
             return None;
         }
