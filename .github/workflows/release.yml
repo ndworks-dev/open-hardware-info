@@ -66,10 +66,12 @@ jobs:
           $version = '${{ steps.version.outputs.version }}'
           if (-not $version) { $version = 'dev' }
           New-Item -ItemType Directory dist, out | Out-Null
-          Copy-Item target/release/open-hardware-info.exe dist/
+          Copy-Item target/release/open-hardware-info.exe, target/release/ohi-sensor.exe dist/
           # The licenses and their notices have to travel with the binary.
           Copy-Item LICENSE dist/LICENSE.txt
           Copy-Item licenses/LicenseRef-Slint-Royalty-free-2.0.md dist/LICENSE-Slint.txt
+          Copy-Item licenses/LGPL-2.1-PawnIO-Modules.txt dist/LICENSE-PawnIO-Modules.txt
+          Copy-Item licenses/PawnIO-Modules-NOTICE.txt dist/NOTICE-PawnIO-Modules.txt
           cargo about generate about.hbs -o dist/THIRD-PARTY-LICENSES.txt
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Compress-Archive -Path dist/* -DestinationPath "out/OpenHardwareInfo-$version-windows-x64.zip"
