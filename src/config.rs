@@ -228,7 +228,7 @@ mod tests {
     fn invalid_values_are_rejected() {
         assert!(Config::parse("text_color = \"azul\"").is_err());
         assert!(Config::parse("unknown_key = 1").is_err());
-        assert!(Config::parse("[[items]]\nmetric = \"cpu_temp\"").is_err());
+        assert!(Config::parse("[[items]]\nmetric = \"fan_speed\"").is_err());
         assert!(Config::parse("[[items]]\nmetric = \"cpu\"\ncolor = \"#12\"").is_err());
     }
 
