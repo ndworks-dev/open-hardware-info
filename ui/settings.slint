@@ -2,6 +2,7 @@ import { AboutSlint, Button, CheckBox, ComboBox, LineEdit, Palette, SpinBox, Tab
 
 export struct ItemRow {
     name: string,
+    hint: string,
     enabled: bool,
     label: string,
     default-label: string,
@@ -184,19 +185,29 @@ export component SettingsWindow inherits Window {
                             padding-left: 0;
                             padding-top: 2px;
                             padding-bottom: 2px;
-                            CheckBox {
+                            VerticalLayout {
                                 width: 190px;
-                                text: item.name;
-                                checked <=> item.enabled;
-                                toggled => { root.changed(); }
+                                alignment: center;
+                                CheckBox {
+                                    text: item.name;
+                                    checked <=> item.enabled;
+                                    toggled => { root.changed(); }
+                                }
+                                // Lines up with the checkbox text above it.
+                                if item.hint != "": HorizontalLayout {
+                                    padding-left: 30px;
+                                    Hint { text: item.hint; }
+                                }
                             }
                             LineEdit {
                                 width: 80px;
+                                height: 32px;
                                 text <=> item.label;
                                 placeholder-text: item.default-label;
                                 edited => { root.changed(); }
                             }
                             ColorField {
+                                height: 32px;
                                 placeholder: "Cor";
                                 value <=> item.color;
                                 edited => { root.changed(); }
@@ -204,12 +215,14 @@ export component SettingsWindow inherits Window {
                             Button {
                                 text: "↑";
                                 width: 34px;
+                                height: 32px;
                                 enabled: i > 0;
                                 clicked => { root.move-item(i, -1); }
                             }
                             Button {
                                 text: "↓";
                                 width: 34px;
+                                height: 32px;
                                 enabled: i < root.items.length - 1;
                                 clicked => { root.move-item(i, 1); }
                             }
