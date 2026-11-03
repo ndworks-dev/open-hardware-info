@@ -34,7 +34,7 @@ Para instalar ou remover, abra o PowerShell como administrador:
 & ([scriptblock]::Create((irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1))) -UninstallCpuTemp
 ```
 
-Depois de instalar, ative "Temperatura da CPU" nas configurações. A remoção mantém o PawnIO, porque outros programas podem usá-lo; para tirá-lo, use as configurações do Windows.
+Depois de instalar, ative "Temperatura da CPU" nas configurações. A remoção mantém o PawnIO, porque outros programas podem usá-lo; para tirá-lo, use as configurações do Windows. Isso deixa o pacote do driver no sistema: para removê-lo também, encontre o `pawnio.inf` em `pnputil /enum-drivers` e rode `pnputil /delete-driver oemNN.inf` como administrador, usando o nome publicado que aparecer ali.
 
 Alguns anti-cheats podem bloquear jogos com o PawnIO instalado. Funciona em processadores AMD Ryzen e Intel, e a leitura em Intel ainda não foi testada em hardware real.
 
