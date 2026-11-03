@@ -1,0 +1,20 @@
+Open Hardware Info includes the following third-party software.
+
+================================================================================
+Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0
+Used by:
+  - slint, slint-macros and the i-slint-* crates
+================================================================================
+
+The license text is in LICENSE-Slint.txt, next to this file.
+{{#each licenses}}
+
+================================================================================
+{{{name}}}
+Used by:
+{{#each used_by}}  - {{{crate.name}}} {{{crate.version}}}
+{{/each}}
+================================================================================
+
+{{{text}}}
+{{/each}}

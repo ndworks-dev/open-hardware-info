@@ -87,7 +87,7 @@ cargo test
 
 `.github/workflows/release.yml` compila, verifica e testa cada push e pull request. Quando um push na `main` contém commits que justificam uma release, ele cria a tag `vX.Y.Z` e publica uma release no GitHub com:
 
-- `OpenHardwareInfo-X.Y.Z-windows-x64.zip`: o executável
+- `OpenHardwareInfo-X.Y.Z-windows-x64.zip`: o executável e os textos das licenças, inclusive os das dependências
 - `install.ps1`
 - `SHA256SUMS.txt`
 

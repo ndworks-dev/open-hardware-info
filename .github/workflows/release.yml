@@ -32,6 +32,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.3
+
       - name: Decide version
         id: version
         shell: bash
@@ -63,8 +67,11 @@ jobs:
           if (-not $version) { $version = 'dev' }
           New-Item -ItemType Directory dist, out | Out-Null
           Copy-Item target/release/open-hardware-info.exe dist/
-          # The license's warranty disclaimer has to travel with the binary.
-          if (Test-Path LICENSE) { Copy-Item LICENSE dist/LICENSE.txt }
+          # The licenses and their notices have to travel with the binary.
+          Copy-Item LICENSE dist/LICENSE.txt
+          Copy-Item licenses/LicenseRef-Slint-Royalty-free-2.0.md dist/LICENSE-Slint.txt
+          cargo about generate about.hbs -o dist/THIRD-PARTY-LICENSES.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Compress-Archive -Path dist/* -DestinationPath "out/OpenHardwareInfo-$version-windows-x64.zip"
           # The installer learns which repository to download from here.
           (Get-Content scripts/install.ps1 -Raw).Replace('__REPO__', '${{ github.repository }}') |
