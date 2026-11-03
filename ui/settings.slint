@@ -75,6 +75,8 @@ export component SettingsWindow inherits Window {
     in-out property <string> background-color;
     // Items
     in-out property <[ItemRow]> items;
+    in property <bool> sensor-installed;
+    callback install-sensor();
     // Position
     in property <[string]> monitor-names;
     in-out property <int> monitor-index;
@@ -194,9 +196,20 @@ export component SettingsWindow inherits Window {
                                     toggled => { root.changed(); }
                                 }
                                 // Lines up with the checkbox text above it.
-                                if item.hint != "": HorizontalLayout {
+                                if item.hint != "" && !root.sensor-installed: HorizontalLayout {
                                     padding-left: 30px;
+                                    spacing: 6px;
+                                    alignment: start;
                                     Hint { text: item.hint; }
+                                    Text {
+                                        text: "Instalar";
+                                        font-size: 12px;
+                                        color: Palette.accent-background;
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.install-sensor(); }
+                                        }
+                                    }
                                 }
                             }
                             LineEdit {

@@ -9,7 +9,7 @@
 #[allow(dead_code)] // Each side of the protocol uses only its half.
 mod sensor_shared;
 
-use sensor_shared::{encode, is_plausible, MAPPING_NAME, MAPPING_SIZE};
+use sensor_shared::{encode, is_plausible, MAPPING_NAME, MAPPING_SIZE, SERVICE_NAME};
 use std::arch::x86_64::__cpuid;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
@@ -31,7 +31,6 @@ use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{CreateEventW, CreateMutexW, ReleaseMutex, SetEvent, WaitForSingleObject};
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-const SERVICE_NAME: &str = "OpenHardwareInfoSensor";
 const POLL_MS: u32 = 1_000;
 
 // PawnIO modules are loaded only if their signature is valid, so these bytes

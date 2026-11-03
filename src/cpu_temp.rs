@@ -1,11 +1,30 @@
 //! Reads the CPU temperature published by the optional `ohi-sensor` service.
 //! The widget itself never touches the driver and needs no elevation.
 
-use crate::sensor_shared::{decode, MAPPING_NAME, MAPPING_SIZE};
+use crate::sensor_shared::{decode, MAPPING_NAME, MAPPING_SIZE, SERVICE_NAME};
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS};
+use windows_sys::Win32::System::Services::{CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS};
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+
+/// Whether the service exists, running or not. Needs no elevation.
+pub fn service_installed() -> bool {
+    unsafe {
+        let manager = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
+        if manager.is_null() {
+            return false;
+        }
+        let name = crate::wide(SERVICE_NAME);
+        let service = OpenServiceW(manager, name.as_ptr(), SERVICE_QUERY_STATUS);
+        let installed = !service.is_null();
+        if installed {
+            CloseServiceHandle(service);
+        }
+        CloseServiceHandle(manager);
+        installed
+    }
+}
 
 struct View {
     mapping: HANDLE,

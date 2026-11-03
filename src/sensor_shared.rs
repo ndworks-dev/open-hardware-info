@@ -7,6 +7,7 @@
 
 pub const MAPPING_NAME: &str = r"Global\OpenHardwareInfo.CpuTemp.v1";
 pub const MAPPING_SIZE: u32 = 8;
+pub const SERVICE_NAME: &str = "OpenHardwareInfoSensor";
 
 /// The service publishes every second; anything older means it stopped or stalled.
 const MAX_AGE_MS: u64 = 5_000;
