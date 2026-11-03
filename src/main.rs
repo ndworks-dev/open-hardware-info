@@ -4,11 +4,12 @@ mod autostart;
 mod config;
 mod metrics;
 mod render;
+mod settings;
 mod taskbar;
 
 use config::{Anchor, Config, Rgba};
 use metrics::{Command, Metric, Snapshot};
-use render::{Cell, Renderer};
+use render::{Cell, Renderer, Style};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
@@ -31,13 +32,18 @@ const APP_NAME: &str = "Open Hardware Info";
 const WM_APP_SAMPLE: u32 = WM_APP + 1;
 const WM_APP_TRAY: u32 = WM_APP + 2;
 const WM_APP_MENU: u32 = WM_APP + 3;
+/// Sent by the settings window right after it saves the config.
+pub const WM_APP_RELOAD: u32 = WM_APP + 4;
+pub const MAIN_CLASS: &str = "OpenHardwareInfoMain";
 
 const ID_METRIC: u32 = 1000;
 const ID_MONITOR: u32 = 2000;
 const ID_ANCHOR_LEFT: u32 = 3000;
 const ID_ANCHOR_RIGHT: u32 = 3001;
+const ID_LAYOUT_SIDE: u32 = 3010;
+const ID_LAYOUT_STACKED: u32 = 3011;
 const ID_AUTOSTART: u32 = 3100;
-const ID_OPEN_CONFIG: u32 = 3200;
+const ID_SETTINGS: u32 = 3200;
 const ID_EXIT: u32 = 3900;
 
 pub fn wide(text: &str) -> Vec<u16> {
@@ -230,15 +236,14 @@ impl App {
         let dpi = unsafe { GetDpiForWindow(target.hwnd) }.max(96);
         let scale = |dips: i32| dips * dpi as i32 / 96;
         let background = Rgba::parse(&self.config.background).unwrap_or(Rgba::TRANSPARENT);
-        let (width, height) = self.renderer.render(
-            &cells,
-            &self.config.font,
-            self.config.font_size,
-            dpi,
-            self.config.rows,
-            target.height(),
+        let style = Style {
+            font: &self.config.font,
+            font_size: self.config.font_size,
+            font_weight: self.config.font_weight,
+            rows: self.config.rows,
             background,
-        );
+        };
+        let (width, height) = self.renderer.render(&cells, &style, dpi, target.height());
         let tray_left = target.tray_left.map(|left| left - target.rect.left);
         let x = taskbar::place_x(
             self.config.anchor,
@@ -322,9 +327,15 @@ impl App {
             add(side, MF_STRING | check(anchor == Anchor::Right), ID_ANCHOR_RIGHT as usize, "Direita");
             add(root, MF_POPUP, side as usize, "Posição");
 
+            let arrangement = CreatePopupMenu();
+            let rows = self.config.rows;
+            add(arrangement, MF_STRING | check(rows == 1), ID_LAYOUT_SIDE as usize, "Lado a lado");
+            add(arrangement, MF_STRING | check(rows > 1), ID_LAYOUT_STACKED as usize, "Um em cima do outro");
+            add(root, MF_POPUP, arrangement as usize, "Disposição");
+
             AppendMenuW(root, MF_SEPARATOR, 0, null());
             add(root, MF_STRING | check(autostart::is_enabled()), ID_AUTOSTART as usize, "Iniciar com o Windows");
-            add(root, MF_STRING, ID_OPEN_CONFIG as usize, "Editar configurações...");
+            add(root, MF_STRING, ID_SETTINGS as usize, "Configurações...");
             AppendMenuW(root, MF_SEPARATOR, 0, null());
             add(root, MF_STRING, ID_EXIT as usize, "Sair");
             root
@@ -342,7 +353,11 @@ impl App {
             ID_AUTOSTART => {
                 autostart::set_enabled(!autostart::is_enabled());
             }
-            ID_OPEN_CONFIG => self.open_config(),
+            ID_SETTINGS => self.open_settings(),
+            ID_LAYOUT_SIDE | ID_LAYOUT_STACKED => {
+                self.config.rows = if id == ID_LAYOUT_SIDE { 1 } else { 2 };
+                self.save_config();
+            }
             ID_ANCHOR_LEFT | ID_ANCHOR_RIGHT => {
                 self.config.anchor = if id == ID_ANCHOR_LEFT { Anchor::Left } else { Anchor::Right };
                 self.save_config();
@@ -364,42 +379,36 @@ impl App {
         self.refresh();
     }
 
-    fn open_config(&mut self) {
-        if !self.config_path.exists() {
-            self.save_config();
-        }
-        let path = wide(&format!("\"{}\"", self.config_path.display()));
-        // notepad, not the "open" verb: .toml often has no associated program.
-        let notepad = wide("notepad.exe");
+    /// The settings window is a separate process of this same executable. It
+    /// exists only while open, so the widget stays small, and a failure in it
+    /// cannot affect the window living inside the taskbar.
+    fn open_settings(&self) {
+        let Ok(exe) = std::env::current_exe() else { return };
+        let exe = wide(&exe.display().to_string());
+        let args = wide(&format!("--settings --config \"{}\"", self.config_path.display()));
         unsafe {
-            ShellExecuteW(null_mut(), null(), notepad.as_ptr(), path.as_ptr(), null(), SW_SHOWNORMAL);
+            ShellExecuteW(null_mut(), null(), exe.as_ptr(), args.as_ptr(), null(), SW_SHOWNORMAL);
         }
     }
 }
 
-/// Tray icon drawn in code, so the build needs no resource compiler.
-fn create_icon() -> HICON {
-    const SIZE: usize = 32;
-    let mut color = vec![0u8; SIZE * SIZE * 4];
-    for (column, top) in [(5usize, 20usize), (13, 12), (21, 4)] {
-        for y in top..28 {
-            for x in column..column + 6 {
-                let i = (y * SIZE + x) * 4;
-                color[i..i + 4].copy_from_slice(&[0x60, 0xC8, 0x2E, 0xFF]); // BGRA
-            }
-        }
-    }
-    let mask = vec![0u8; SIZE * SIZE / 8];
+/// The embedded application icon, at the size the tray asks for.
+fn load_tray_icon() -> HICON {
+    const APP_ICON_ID: usize = 1;
     unsafe {
-        CreateIcon(
+        let icon = LoadImageW(
             GetModuleHandleW(null()),
-            SIZE as i32,
-            SIZE as i32,
-            1,
-            32,
-            mask.as_ptr(),
-            color.as_ptr(),
-        )
+            APP_ICON_ID as *const u16,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            LR_DEFAULTCOLOR,
+        );
+        if icon.is_null() {
+            LoadIconW(null_mut(), IDI_APPLICATION)
+        } else {
+            icon as HICON
+        }
     }
 }
 
@@ -449,9 +458,15 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
             0
         }
         WM_APP_TRAY => {
-            if lparam as u32 == WM_RBUTTONUP {
-                show_menu(hwnd);
+            match lparam as u32 {
+                WM_RBUTTONUP => show_menu(hwnd),
+                WM_LBUTTONDBLCLK => with_app(|app| app.open_settings()),
+                _ => {}
             }
+            0
+        }
+        WM_APP_RELOAD => {
+            with_app(App::refresh);
             0
         }
         WM_APP_MENU => {
@@ -528,6 +543,11 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(config::default_path);
 
+    if args.iter().any(|a| a == "--settings") {
+        settings::run(config_path);
+        return;
+    }
+
     unsafe {
         // Held until the process exits; a second copy just leaves.
         let mutex = wide("Local\\OpenHardwareInfo.SingleInstance");
@@ -538,13 +558,13 @@ fn main() {
         TASKBAR_CREATED.set(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()));
     }
 
-    register_class("OpenHardwareInfoMain", Some(main_proc));
+    register_class(MAIN_CLASS, Some(main_proc));
     register_class("OpenHardwareInfoWidget", Some(widget_proc));
 
     // Top-level rather than message-only: message-only windows do not receive
     // the TaskbarCreated broadcast. Never shown.
     let main = unsafe {
-        let class = wide("OpenHardwareInfoMain");
+        let class = wide(MAIN_CLASS);
         let title = wide(APP_NAME);
         CreateWindowExW(
             WS_EX_TOOLWINDOW,
@@ -588,7 +608,7 @@ fn main() {
         commands,
         placed: (0, 0, 0, 0),
         menu_taskbars: Vec::new(),
-        icon: create_icon(),
+        icon: load_tray_icon(),
     };
     app.update_tray(NIM_ADD);
     APP.with(|slot| *slot.borrow_mut() = Some(app));

@@ -1,0 +1,332 @@
+import { AboutSlint, Button, CheckBox, ComboBox, LineEdit, Palette, SpinBox, TabWidget, ListView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export struct ItemRow {
+    name: string,
+    enabled: bool,
+    label: string,
+    default-label: string,
+    color: string,
+}
+
+export global Bridge {
+    pure callback parse-color(string) -> color;
+    callback pick-color(string) -> string;
+}
+
+component FieldLabel inherits Text {
+    vertical-alignment: center;
+    min-width: 170px;
+    horizontal-stretch: 0;
+}
+
+component Hint inherits Text {
+    wrap: word-wrap;
+    font-size: 12px;
+    color: Palette.foreground.with-alpha(0.65);
+}
+
+component ColorField inherits HorizontalLayout {
+    in property <string> placeholder;
+    in-out property <string> value;
+    callback edited();
+    spacing: 8px;
+
+    Rectangle {
+        width: 32px;
+        height: 32px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: Palette.border;
+        background: Bridge.parse-color(root.value);
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.value = Bridge.pick-color(root.value);
+                root.edited();
+            }
+        }
+    }
+    LineEdit {
+        text <=> root.value;
+        placeholder-text: root.placeholder;
+        edited => {
+            root.edited();
+        }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: "Open Hardware Info - Configurações";
+    icon: @image-url("../assets/icon-64.png");
+    preferred-width: 620px;
+    preferred-height: 520px;
+    min-width: 620px;
+    min-height: 420px;
+
+    // Appearance
+    in property <[string]> font-names;
+    in-out property <int> font-index;
+    in-out property <int> font-size;
+    in-out property <int> weight-index;
+    in-out property <int> layout-index;
+    in-out property <string> text-color;
+    in-out property <string> background-color;
+    // Items
+    in-out property <[ItemRow]> items;
+    // Position
+    in property <[string]> monitor-names;
+    in-out property <int> monitor-index;
+    in-out property <int> anchor-index;
+    in-out property <int> offset;
+    in-out property <int> secondary-reserve;
+    // General
+    in-out property <int> interval;
+    in-out property <string> adapter;
+    in-out property <bool> autostart;
+    // Status
+    in property <string> message;
+    in property <bool> message-is-error;
+
+    callback changed();
+    callback move-item(int, int);
+    callback autostart-toggled(bool);
+    callback open-file();
+    callback restore-defaults();
+
+    property <bool> restore-armed: false;
+
+    VerticalBox {
+        if root.message != "": Rectangle {
+            background: root.message-is-error ? #c4282833 : Palette.alternate-background;
+            border-radius: 4px;
+            HorizontalBox {
+                Text {
+                    text: root.message;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        TabWidget {
+            Tab {
+                title: "Aparência";
+                VerticalBox {
+                    alignment: start;
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Fonte"; }
+                        ComboBox {
+                            model: root.font-names;
+                            current-index <=> root.font-index;
+                            selected => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Tamanho (pt)"; }
+                        SpinBox {
+                            minimum: 5;
+                            maximum: 30;
+                            value <=> root.font-size;
+                            edited => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Peso"; }
+                        ComboBox {
+                            model: ["Normal", "Seminegrito", "Negrito"];
+                            current-index <=> root.weight-index;
+                            selected => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Disposição"; }
+                        ComboBox {
+                            model: ["Lado a lado", "Um em cima do outro (2 linhas)", "Um em cima do outro (3 linhas)"];
+                            current-index <=> root.layout-index;
+                            selected => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Cor do texto"; }
+                        ColorField {
+                            placeholder: "Automática (segue o tema do Windows)";
+                            value <=> root.text-color;
+                            edited => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Cor de fundo"; }
+                        ColorField {
+                            placeholder: "Transparente, ou #RRGGBBAA";
+                            value <=> root.background-color;
+                            edited => { root.changed(); }
+                        }
+                    }
+                    Hint { text: "As mudanças aparecem na barra de tarefas enquanto você edita."; }
+                    Hint { text: "Lado a lado ocupa mais largura. Se cobrir os ícones da barra, use o lado esquerdo na aba Posição ou mostre menos itens."; }
+                }
+            }
+
+            Tab {
+                title: "Itens";
+                VerticalBox {
+                    Hint { text: "Marque o que deseja ver. As setas mudam a ordem na barra. Rótulo e cor são opcionais."; }
+                    ListView {
+                        for item[i] in root.items: HorizontalBox {
+                            padding-left: 0;
+                            padding-top: 2px;
+                            padding-bottom: 2px;
+                            CheckBox {
+                                width: 190px;
+                                text: item.name;
+                                checked <=> item.enabled;
+                                toggled => { root.changed(); }
+                            }
+                            LineEdit {
+                                width: 80px;
+                                text <=> item.label;
+                                placeholder-text: item.default-label;
+                                edited => { root.changed(); }
+                            }
+                            ColorField {
+                                placeholder: "Cor";
+                                value <=> item.color;
+                                edited => { root.changed(); }
+                            }
+                            Button {
+                                text: "↑";
+                                width: 34px;
+                                enabled: i > 0;
+                                clicked => { root.move-item(i, -1); }
+                            }
+                            Button {
+                                text: "↓";
+                                width: 34px;
+                                enabled: i < root.items.length - 1;
+                                clicked => { root.move-item(i, 1); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Posição";
+                VerticalBox {
+                    alignment: start;
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Monitor"; }
+                        ComboBox {
+                            model: root.monitor-names;
+                            current-index <=> root.monitor-index;
+                            selected => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Lado da barra"; }
+                        ComboBox {
+                            model: ["Esquerda", "Direita"];
+                            current-index <=> root.anchor-index;
+                            selected => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Distância da borda"; }
+                        SpinBox {
+                            minimum: 0;
+                            maximum: 2000;
+                            value <=> root.offset;
+                            edited => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Reserva no 2º monitor"; }
+                        SpinBox {
+                            minimum: 0;
+                            maximum: 2000;
+                            value <=> root.secondary-reserve;
+                            edited => { root.changed(); }
+                        }
+                    }
+                    Hint { text: "A reserva é o espaço deixado para o relógio nas barras de monitores secundários, onde o Windows não informa a posição dele."; }
+                }
+            }
+
+            Tab {
+                title: "Geral";
+                VerticalBox {
+                    alignment: start;
+                    CheckBox {
+                        text: "Iniciar com o Windows";
+                        checked <=> root.autostart;
+                        toggled => { root.autostart-toggled(self.checked); }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Atualizar a cada (ms)"; }
+                        SpinBox {
+                            minimum: 250;
+                            maximum: 60000;
+                            step-size: 250;
+                            value <=> root.interval;
+                            edited => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        FieldLabel { text: "Adaptador de rede"; }
+                        LineEdit {
+                            placeholder-text: "Todos (ou parte do nome, ex.: Ethernet)";
+                            text <=> root.adapter;
+                            edited => { root.changed(); }
+                        }
+                    }
+                    HorizontalBox {
+                        padding: 0;
+                        alignment: start;
+                        Button {
+                            text: "Abrir config.toml";
+                            clicked => { root.open-file(); }
+                        }
+                        Button {
+                            text: root.restore-armed ? "Clique de novo para confirmar" : "Restaurar padrões";
+                            clicked => {
+                                if root.restore-armed {
+                                    root.restore-armed = false;
+                                    root.restore-defaults();
+                                } else {
+                                    root.restore-armed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Sobre";
+                VerticalBox {
+                    alignment: start;
+                    Text {
+                        text: "Open Hardware Info";
+                        font-size: 18px;
+                        font-weight: 600;
+                    }
+                    Hint { text: "Monitor de recursos na barra de tarefas, sem driver de kernel."; }
+                    AboutSlint { max-height: 180px; }
+                }
+            }
+        }
+    }
+}

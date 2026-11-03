@@ -4,11 +4,42 @@
 //! used as a coverage mask, then recolored. Grayscale antialiasing is required:
 //! ClearType's per-channel fringes would be wrong on a transparent background.
 
-use crate::config::Rgba;
+use crate::config::{FontWeight, Rgba, SYSTEM_FONT};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{HWND, POINT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::*;
-use windows_sys::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    SystemParametersInfoW, UpdateLayeredWindow, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, ULW_ALPHA,
+};
+
+/// The family Windows uses for its own interface text.
+pub fn system_font_name() -> String {
+    unsafe {
+        let mut metrics: NONCLIENTMETRICSW = std::mem::zeroed();
+        metrics.cbSize = std::mem::size_of::<NONCLIENTMETRICSW>() as u32;
+        let ok = SystemParametersInfoW(
+            SPI_GETNONCLIENTMETRICS,
+            metrics.cbSize,
+            &mut metrics as *mut _ as *mut _,
+            0,
+        ) != 0;
+        let face = &metrics.lfMessageFont.lfFaceName;
+        let end = face.iter().position(|&c| c == 0).unwrap_or(face.len());
+        if ok && end > 0 {
+            String::from_utf16_lossy(&face[..end])
+        } else {
+            "Segoe UI".to_owned()
+        }
+    }
+}
+
+pub struct Style<'a> {
+    pub font: &'a str,
+    pub font_size: f32,
+    pub font_weight: FontWeight,
+    pub rows: usize,
+    pub background: Rgba,
+}
 
 pub struct Cell {
     pub label: String,
@@ -84,7 +115,7 @@ pub fn clickable_background(background: Rgba) -> Rgba {
 pub struct Renderer {
     dc: HDC,
     font: HFONT,
-    font_key: (String, i32),
+    font_key: (String, i32, i32),
     bitmap: HBITMAP,
     bits: *mut u32,
     size: (i32, i32),
@@ -100,16 +131,25 @@ impl Renderer {
         Renderer {
             dc,
             font: null_mut(),
-            font_key: (String::new(), 0),
+            font_key: (String::new(), 0, 0),
             bitmap: null_mut(),
             bits: null_mut(),
             size: (0, 0),
         }
     }
 
-    fn set_font(&mut self, face: &str, points: f32, dpi: u32) {
+    fn set_font(&mut self, face: &str, points: f32, weight: FontWeight, dpi: u32) {
+        let system;
+        let face = if face == SYSTEM_FONT {
+            system = system_font_name();
+            system.as_str()
+        } else {
+            face
+        };
         let height = -(points * dpi as f32 / 72.0).round() as i32;
-        if self.font_key.0 == face && self.font_key.1 == height && !self.font.is_null() {
+        let weight = weight.value();
+        let same = self.font_key.0 == face && self.font_key.1 == height && self.font_key.2 == weight;
+        if same && !self.font.is_null() {
             return;
         }
         unsafe {
@@ -119,7 +159,7 @@ impl Renderer {
                 0,
                 0,
                 0,
-                FW_SEMIBOLD as _,
+                weight,
                 0,
                 0,
                 0,
@@ -136,7 +176,7 @@ impl Renderer {
             }
             self.font = font;
         }
-        self.font_key = (face.to_owned(), height);
+        self.font_key = (face.to_owned(), height, weight);
     }
 
     fn measure(&self, text: &str) -> (i32, i32) {
@@ -180,18 +220,8 @@ impl Renderer {
 
     /// Draws the cells and returns the bitmap size. Call `present` afterwards,
     /// once the window has been moved and resized to match.
-    #[allow(clippy::too_many_arguments)]
-    pub fn render(
-        &mut self,
-        cells: &[Cell],
-        font: &str,
-        font_size: f32,
-        dpi: u32,
-        rows: usize,
-        height: i32,
-        background: Rgba,
-    ) -> (i32, i32) {
-        self.set_font(font, font_size, dpi);
+    pub fn render(&mut self, cells: &[Cell], style: &Style, dpi: u32, height: i32) -> (i32, i32) {
+        self.set_font(style.font, style.font_size, style.font_weight, dpi);
         let scale = |dips: i32| dips * dpi as i32 / 96;
         let line_height = self.measure("Ag").1;
         let sizes: Vec<(i32, i32)> = cells
@@ -199,7 +229,7 @@ impl Renderer {
             .map(|c| (self.measure(&c.label).0, self.measure(c.template).0.max(self.measure(&c.value).0)))
             .collect();
         let gap = scale(4);
-        let (placed, width) = layout(&sizes, rows, line_height, height, gap, gap);
+        let (placed, width) = layout(&sizes, style.rows, line_height, height, gap, gap);
         let width = width.max(1);
         self.ensure_bitmap(width, height);
 
@@ -218,7 +248,7 @@ impl Renderer {
             GdiFlush(); // GDI batches calls; finish before touching the bits.
         }
 
-        let background = clickable_background(background);
+        let background = clickable_background(style.background);
         let idle = compose(0, Rgba::TRANSPARENT, background);
         // Pixels are converted per cell, because each cell has its own color.
         let mut converted = vec![false; pixels.len()];

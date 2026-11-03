@@ -9,6 +9,27 @@ pub enum Anchor {
     Right,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FontWeight {
+    Regular,
+    Semibold,
+    Bold,
+}
+
+impl FontWeight {
+    pub fn value(self) -> i32 {
+        match self {
+            FontWeight::Regular => 400,
+            FontWeight::Semibold => 600,
+            FontWeight::Bold => 700,
+        }
+    }
+}
+
+/// `font` value meaning "whatever font Windows itself is configured to use".
+pub const SYSTEM_FONT: &str = "system";
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Item {
     pub metric: Metric,
@@ -39,10 +60,12 @@ pub struct Config {
     /// DIPs kept free at the right of secondary taskbars, which have no
     /// TrayNotifyWnd to measure.
     pub secondary_reserve: i32,
-    /// Items stacked per column (1 or 2 fit a standard taskbar).
+    /// Items stacked per column: 1 is side by side, 2 or more is stacked.
     pub rows: usize,
+    /// "system" or a font family name.
     pub font: String,
     pub font_size: f32,
+    pub font_weight: FontWeight,
     /// "auto" follows the Windows theme, otherwise "#RRGGBB".
     pub text_color: String,
     /// "transparent" or "#RRGGBBAA".
@@ -61,8 +84,9 @@ impl Default for Config {
             offset: 8,
             secondary_reserve: 190,
             rows: 2,
-            font: "Segoe UI".into(),
+            font: SYSTEM_FONT.into(),
             font_size: 9.0,
+            font_weight: FontWeight::Regular,
             text_color: "auto".into(),
             background: "transparent".into(),
             adapter: String::new(),
@@ -88,7 +112,7 @@ impl Config {
 
     /// Clamps ranges, validates colors, drops duplicate metrics and lists any
     /// missing metric as disabled so the menu can always offer it.
-    fn normalize(&mut self) -> Result<(), String> {
+    pub fn normalize(&mut self) -> Result<(), String> {
         self.interval_ms = self.interval_ms.clamp(250, 60_000);
         self.rows = self.rows.clamp(1, 3);
         self.font_size = self.font_size.clamp(5.0, 30.0);
@@ -122,7 +146,11 @@ impl Config {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        std::fs::write(path, text).map_err(|e| e.to_string())
+        // Written whole and renamed into place: the settings window and the
+        // widget process share this file, and neither may read half of it.
+        let temporary = path.with_extension("toml.tmp");
+        std::fs::write(&temporary, text).map_err(|e| e.to_string())?;
+        std::fs::rename(&temporary, path).map_err(|e| e.to_string())
     }
 }
 
@@ -163,6 +191,26 @@ mod tests {
         let cfg = Config::default();
         let text = toml::to_string_pretty(&cfg).unwrap();
         assert_eq!(Config::parse(&text).unwrap(), cfg);
+    }
+
+    #[test]
+    fn config_from_an_older_version_still_loads() {
+        let cfg = Config::parse("font = \"Segoe UI\"\nrows = 2\n").unwrap();
+        assert_eq!(cfg.font, "Segoe UI");
+        assert_eq!(cfg.font_weight, FontWeight::Regular);
+    }
+
+    #[test]
+    fn save_replaces_the_file_and_leaves_no_temporary() {
+        let dir = std::env::temp_dir().join(format!("ohi-test-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let mut cfg = Config::default();
+        cfg.save(&path).unwrap();
+        cfg.rows = 1;
+        cfg.save(&path).unwrap();
+        assert_eq!(Config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap().rows, 1);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

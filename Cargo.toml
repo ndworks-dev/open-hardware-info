@@ -7,6 +7,13 @@ description = "Monitor de recursos na barra de tarefas do Windows, sem driver de
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+# Only the settings window uses Slint. The CPU renderer avoids depending on
+# OpenGL for a small form with no animation.
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+
+[build-dependencies]
+slint-build = "1.18"
+embed-resource = "3"
 
 [dependencies.windows-sys]
 version = "0.61"
@@ -22,6 +29,7 @@ features = [
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_Controls_Dialogs",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
