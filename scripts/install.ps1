@@ -60,6 +60,11 @@ $pawnIoSha256 = '1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA303
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
 
+function Test-Elevated {
+    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Stop-Sensor {
     if (-not (Get-Service $serviceName -ErrorAction SilentlyContinue)) { return }
     Stop-Service $serviceName -Force
@@ -136,11 +141,8 @@ function Get-Package([string]$Destination) {
 }
 
 $changesSensor = $InstallCpuTemp -or $UninstallCpuTemp
-if ($changesSensor) {
-    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw 'The CPU temperature options need an elevated PowerShell (Run as administrator).'
-    }
+if ($changesSensor -and -not (Test-Elevated)) {
+    throw 'The CPU temperature options need an elevated PowerShell (Run as administrator).'
 }
 
 # Files that will run elevated stay out of %TEMP%, where any unelevated program
@@ -218,7 +220,14 @@ try {
     $link.Description = 'Resource monitor for the Windows taskbar'
     $link.Save()
 
-    Start-Process $exe
+    if (Test-Elevated) {
+        # The app needs no privileges and must not inherit these. Explorer opens
+        # it in the unelevated desktop session instead.
+        Write-Warning "This PowerShell is elevated, and the app does not need it. It was installed for the account $env:USERNAME."
+        Start-Process explorer.exe -ArgumentList "`"$exe`""
+    } else {
+        Start-Process $exe
+    }
     Write-Step 'Open Hardware Info is installed and running. It is also in the Start menu.'
 }
 finally {
