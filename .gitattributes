@@ -4,3 +4,6 @@
 # Shell scripts run under bash, including on Windows CI runners, which
 # would otherwise check them out with CRLF line endings.
 *.sh text eol=lf
+
+# Signed PawnIO modules: any byte change invalidates the signature.
+*.bin binary

@@ -1,6 +1,8 @@
-//! Sensor sampling. Everything here runs on a worker thread and uses only
-//! user-mode APIs: no driver, no administrator rights, no bundled DLL.
+//! Sensor sampling, on a worker thread and with no administrator rights. The
+//! one reading that needs a driver, the CPU temperature, comes from the optional
+//! `ohi-sensor` service: see `cpu_temp`.
 
+use crate::cpu_temp::CpuTempReader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -20,6 +22,7 @@ pub enum Metric {
     NetDown,
     NetUp,
     Cpu,
+    CpuTemp,
     Ram,
     Gpu,
     GpuTemp,
@@ -28,11 +31,20 @@ pub enum Metric {
 }
 
 impl Metric {
-    pub const ALL: &'static [Metric] =
-        &[Metric::NetDown, Metric::NetUp, Metric::Cpu, Metric::Ram, Metric::Gpu, Metric::GpuTemp, Metric::Vram, Metric::Disk];
+    pub const ALL: &'static [Metric] = &[
+        Metric::NetDown,
+        Metric::NetUp,
+        Metric::Cpu,
+        Metric::CpuTemp,
+        Metric::Ram,
+        Metric::Gpu,
+        Metric::GpuTemp,
+        Metric::Vram,
+        Metric::Disk,
+    ];
 
     pub fn default_enabled(self) -> bool {
-        !matches!(self, Metric::Vram | Metric::Disk)
+        !matches!(self, Metric::CpuTemp | Metric::Vram | Metric::Disk)
     }
 
     pub fn default_label(self) -> &'static str {
@@ -40,6 +52,7 @@ impl Metric {
             Metric::NetDown => "↓",
             Metric::NetUp => "↑",
             Metric::Cpu => "CPU",
+            Metric::CpuTemp => "CPU",
             Metric::Ram => "RAM",
             Metric::Gpu => "GPU",
             Metric::GpuTemp => "GPU",
@@ -53,6 +66,7 @@ impl Metric {
             Metric::NetDown => "Download",
             Metric::NetUp => "Upload",
             Metric::Cpu => "Uso da CPU",
+            Metric::CpuTemp => "Temperatura da CPU (requer PawnIO)",
             Metric::Ram => "Uso da memória",
             Metric::Gpu => "Uso da GPU",
             Metric::GpuTemp => "Temperatura da GPU",
@@ -65,7 +79,7 @@ impl Metric {
     pub fn template(self) -> &'static str {
         match self {
             Metric::NetDown | Metric::NetUp => "99.9 MB/s",
-            Metric::GpuTemp => "100°C",
+            Metric::CpuTemp | Metric::GpuTemp => "100°C",
             _ => "100%",
         }
     }
@@ -74,7 +88,7 @@ impl Metric {
         let Some(value) = value else { return "--".into() };
         match self {
             Metric::NetDown | Metric::NetUp => format_rate(value),
-            Metric::GpuTemp => format!("{value:.0}°C"),
+            Metric::CpuTemp | Metric::GpuTemp => format!("{value:.0}°C"),
             _ => format!("{value:.0}%"),
         }
     }
@@ -101,6 +115,7 @@ pub struct Snapshot {
     pub net_down: Option<f64>,
     pub net_up: Option<f64>,
     pub cpu: Option<f64>,
+    pub cpu_temp: Option<f64>,
     pub ram: Option<f64>,
     pub gpu: Option<f64>,
     pub gpu_temp: Option<f64>,
@@ -114,6 +129,7 @@ impl Snapshot {
             Metric::NetDown => self.net_down,
             Metric::NetUp => self.net_up,
             Metric::Cpu => self.cpu,
+            Metric::CpuTemp => self.cpu_temp,
             Metric::Ram => self.ram,
             Metric::Gpu => self.gpu,
             Metric::GpuTemp => self.gpu_temp,
@@ -359,13 +375,21 @@ pub struct Sampler {
     adapter: String,
     pdh: Option<Pdh>,
     nvml: Option<Nvml>,
+    cpu_temp: CpuTempReader,
     net_previous: HashMap<u64, (u64, u64)>,
     net_time: Option<Instant>,
 }
 
 impl Sampler {
     pub fn new(adapter: String) -> Sampler {
-        Sampler { adapter, pdh: Pdh::open(), nvml: Nvml::load(), net_previous: HashMap::new(), net_time: None }
+        Sampler {
+            adapter,
+            pdh: Pdh::open(),
+            nvml: Nvml::load(),
+            cpu_temp: CpuTempReader::default(),
+            net_previous: HashMap::new(),
+            net_time: None,
+        }
     }
 
     pub fn set_adapter(&mut self, adapter: String) {
@@ -382,6 +406,7 @@ impl Sampler {
             net_down,
             net_up,
             cpu,
+            cpu_temp: self.cpu_temp.read(),
             ram: ram_percent(),
             gpu: nvml.and_then(Nvml::usage),
             gpu_temp: nvml.and_then(Nvml::temperature),
@@ -453,6 +478,8 @@ mod tests {
         assert_eq!(Metric::Gpu.format(None), "--");
         assert_eq!(Metric::Gpu.format(Some(42.4)), "42%");
         assert_eq!(Metric::GpuTemp.format(Some(61.0)), "61°C");
+        assert_eq!(Metric::CpuTemp.format(Some(41.6)), "42°C");
+        assert_eq!(Metric::CpuTemp.format(None), "--");
     }
 
     #[test]

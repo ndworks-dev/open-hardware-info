@@ -2,8 +2,11 @@
 
 mod autostart;
 mod config;
+mod cpu_temp;
 mod metrics;
 mod render;
+#[allow(dead_code)] // Each side of the protocol uses only its half.
+mod sensor_shared;
 mod settings;
 mod taskbar;
 
@@ -527,7 +530,7 @@ fn print_sample() {
     std::thread::sleep(Duration::from_secs(1));
     let snapshot = sampler.sample();
     for &metric in Metric::ALL {
-        println!("{:<24}{}", metric.menu_label(), metric.format(snapshot.value(metric)));
+        println!("{:<36}{}", metric.menu_label(), metric.format(snapshot.value(metric)));
     }
 }
 
