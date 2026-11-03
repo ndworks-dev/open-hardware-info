@@ -66,3 +66,7 @@ A janela de configurações é feita com [Slint](https://slint.dev) e roda em um
 ```powershell
 cargo test
 ```
+
+## Licença
+
+[MIT](LICENSE). A janela de configurações usa o [Slint](https://slint.dev) sob a licença Royalty-free 2.0, que tem termos próprios.

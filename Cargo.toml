@@ -3,6 +3,7 @@ name = "open-hardware-info"
 version = "0.1.0"
 edition = "2021"
 description = "Monitor de recursos na barra de tarefas do Windows, sem driver de kernel"
+license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
