@@ -84,6 +84,7 @@ export component SettingsWindow inherits Window {
     in-out property <int> interval;
     in-out property <string> adapter;
     in-out property <bool> autostart;
+    in property <string> version;
     // Status
     in property <string> message;
     in property <bool> message-is-error;
@@ -323,6 +324,7 @@ export component SettingsWindow inherits Window {
                         font-size: 18px;
                         font-weight: 600;
                     }
+                    Hint { text: "Versão " + root.version; }
                     Hint { text: "Monitor de recursos na barra de tarefas, sem driver de kernel."; }
                     AboutSlint { max-height: 180px; }
                 }

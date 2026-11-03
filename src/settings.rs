@@ -18,7 +18,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, Set
 
 slint::include_modules!();
 
-const WINDOW_TITLE: &str = "Open Hardware Info - Configurações";
+pub const WINDOW_TITLE: &str = "Open Hardware Info - Configurações";
 
 /// Options behind the combo boxes: what each visible entry stores in the file.
 struct Choices {
@@ -302,6 +302,7 @@ pub fn run(path: PathBuf) {
     }
 
     let Ok(ui) = SettingsWindow::new() else { return };
+    ui.set_version(env!("CARGO_PKG_VERSION").into());
     let bridge = ui.global::<Bridge>();
     bridge.on_parse_color(|text| match Rgba::parse(text.trim()) {
         Ok(c) => Color::from_argb_u8(c.a, c.r, c.g, c.b),

@@ -507,6 +507,20 @@ fn register_class(name: &str, proc_: WNDPROC) {
     }
 }
 
+/// Asks a running widget and settings window to close, so the installer can
+/// replace the executable and the widget still removes its tray icon on the way.
+fn quit_running() {
+    let class = wide(MAIN_CLASS);
+    let title = wide(settings::WINDOW_TITLE);
+    unsafe {
+        for window in [FindWindowW(class.as_ptr(), null()), FindWindowW(null(), title.as_ptr())] {
+            if !window.is_null() {
+                PostMessageW(window, WM_CLOSE, 0, 0);
+            }
+        }
+    }
+}
+
 fn print_sample() {
     let mut sampler = metrics::Sampler::new(String::new());
     sampler.sample();
@@ -521,6 +535,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--print-sample") {
         print_sample();
+        return;
+    }
+    if args.iter().any(|a| a == "--quit") {
+        quit_running();
         return;
     }
     let config_path =
