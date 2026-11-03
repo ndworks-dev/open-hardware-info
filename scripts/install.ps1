@@ -72,8 +72,34 @@ function Stop-Sensor {
     Get-Process ($sensorExeName -replace '\.exe$') -ErrorAction SilentlyContinue | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
 }
 
-function Install-PawnIo([string]$Destination) {
-    $installed = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction SilentlyContinue).DisplayVersion
+# Runs this release's installer in a new elevated window, which stays open so its
+# result can be read.
+function Start-ElevatedSensorInstall {
+    $url = if ($Version -eq 'latest') { "https://github.com/$Repo/releases/latest/download/install.ps1" } else { "https://github.com/$Repo/releases/download/v$($Version.TrimStart('v'))/install.ps1" }
+    $command = "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; " +
+        "try { & ([scriptblock]::Create((irm '$url'))) -InstallCpuTemp -Version '$Version' } catch { Write-Host $_ -ForegroundColor Red } finally { Read-Host 'Press Enter to close' }"
+    Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "`"$command`""
+}
+
+# Offered once, on a first install at an interactive prompt: updates must not ask
+# again, and a kernel driver is never installed without an explicit yes.
+function Invoke-SensorOffer {
+    if ($PackagePath -or -not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { return }
+    if (Get-Service $serviceName -ErrorAction SilentlyContinue) { return }
+    Write-Host ''
+    Write-Host 'Optional: CPU temperature needs the PawnIO kernel driver and a small service, which require administrator rights.'
+    Write-Host 'Some anti-cheats may block games while PawnIO is installed. You can also install it later from the app settings.'
+    $answer = Read-Host 'Install it now? [y/N]'
+    if ($answer -notmatch '^(y|yes|s|sim)$') { return }
+    try {
+        Start-ElevatedSensorInstall
+        Write-Step 'Finish in the new administrator window, then turn on "Temperatura da CPU" in the app settings.'
+    } catch {
+        Write-Warning 'The installation was not started. You can install it later from the app settings.'
+    }
+}
+
+function Install-PawnIo([string]$Destination) {    $installed = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction SilentlyContinue).DisplayVersion
     if ($installed -and [version]$installed -ge $pawnIoMinimum) {
         Write-Step "PawnIO $installed is already installed"
         return
@@ -208,6 +234,7 @@ try {
     Write-Step 'Closing the running app, if any'
     Stop-App
 
+    $firstInstall = -not (Test-Path (Join-Path $InstallDir $exeName))
     Write-Step "Installing to $InstallDir"
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
     Copy-Item (Join-Path $files '*') $InstallDir -Recurse -Force
@@ -229,6 +256,7 @@ try {
         Start-Process $exe
     }
     Write-Step 'Open Hardware Info is installed and running. It is also in the Start menu.'
+    if ($firstInstall) { Invoke-SensorOffer }
 }
 finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
