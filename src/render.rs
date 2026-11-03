@@ -34,15 +34,13 @@ pub struct Style<'a> {
     pub font_weight: FontWeight,
     pub rows: usize,
     pub background: Rgba,
+    pub separator: Rgba,
 }
 
 pub struct Cell {
     pub label: String,
     pub value: String,
     pub template: &'static str,
-    /// Values with a stable width line up best on the right; ones that vary a
-    /// lot, like network rates, would otherwise drift away from their label.
-    pub align_left: bool,
     pub color: Rgba,
 }
 
@@ -51,27 +49,46 @@ pub struct CellLayout {
     pub x: i32,
     pub y: i32,
     pub width: i32,
-    pub label_width: i32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Layout {
+    pub cells: Vec<CellLayout>,
+    /// Horizontal position of the line between each pair of columns.
+    pub separators: Vec<i32>,
+    pub top: i32,
+    pub width: i32,
 }
 
 /// Places cells top to bottom in columns of `rows`, vertically centered.
-/// `sizes` is (label width, value width reserved) per cell. Returns the cells
-/// and the total width.
-pub fn layout(sizes: &[(i32, i32)], rows: usize, line_height: i32, height: i32, gap: i32, padding: i32) -> (Vec<CellLayout>, i32) {
+/// `sizes` is (label width, value width reserved) per cell.
+pub fn layout(sizes: &[(i32, i32)], rows: usize, line_height: i32, height: i32, gap: i32, padding: i32) -> Layout {
+    let column_gap = gap * 3;
     let mut cells = Vec::with_capacity(sizes.len());
+    let mut separators = Vec::new();
     let mut x = padding;
     let top = (height - line_height * rows as i32) / 2;
     for column in sizes.chunks(rows.max(1)) {
+        if x > padding {
+            separators.push(x - column_gap / 2);
+        }
         let label = column.iter().map(|s| s.0).max().unwrap_or(0);
         let value = column.iter().map(|s| s.1).max().unwrap_or(0);
         let width = label + gap + value;
         for row in 0..column.len() {
-            cells.push(CellLayout { x, y: top + line_height * row as i32, width, label_width: label });
+            cells.push(CellLayout { x, y: top + line_height * row as i32, width });
         }
-        x += width + gap * 2;
+        x += width + column_gap;
     }
-    let total = if sizes.is_empty() { 0 } else { x - gap * 2 + padding };
-    (cells, total)
+    let width = if sizes.is_empty() { 0 } else { x - column_gap + padding };
+    Layout { cells, separators, top, width }
+}
+
+/// Centers a label and its value inside the width reserved for the cell.
+/// Returns where each of them starts.
+pub fn center_in_cell(cell_x: i32, cell_width: i32, label_width: i32, value_width: i32, gap: i32) -> (i32, i32) {
+    let label_x = cell_x + (cell_width - label_width - gap - value_width) / 2;
+    (label_x, label_x + label_width + gap)
 }
 
 /// Premultiplied BGRA for `color` at `coverage` over a premultiplied background.
@@ -200,15 +217,15 @@ impl Renderer {
         let sizes: Vec<(i32, i32)> =
             cells.iter().map(|c| (self.measure(&c.label).0, self.measure(c.template).0.max(self.measure(&c.value).0))).collect();
         let gap = scale(4);
-        let (placed, width) = layout(&sizes, style.rows, line_height, height, gap, gap);
-        let width = width.max(1);
+        let placed = layout(&sizes, style.rows, line_height, height, gap, gap);
+        let width = placed.width.max(1);
         self.ensure_bitmap(width, height);
 
         let pixels = unsafe { std::slice::from_raw_parts_mut(self.bits, (width * height) as usize) };
         pixels.fill(0);
-        for (cell, at) in cells.iter().zip(&placed) {
-            self.draw_text(at.x, at.y, &cell.label);
-            let value_x = if cell.align_left { at.x + at.label_width + gap } else { at.x + at.width - self.measure(&cell.value).0 };
+        for (cell, at) in cells.iter().zip(&placed.cells) {
+            let (label_x, value_x) = center_in_cell(at.x, at.width, self.measure(&cell.label).0, self.measure(&cell.value).0, gap);
+            self.draw_text(label_x, at.y, &cell.label);
             self.draw_text(value_x, at.y, &cell.value);
         }
         unsafe {
@@ -219,7 +236,7 @@ impl Renderer {
         let idle = compose(0, Rgba::TRANSPARENT, background);
         // Pixels are converted per cell, because each cell has its own color.
         let mut converted = vec![false; pixels.len()];
-        for (cell, at) in cells.iter().zip(&placed) {
+        for (cell, at) in cells.iter().zip(&placed.cells) {
             let top = at.y.clamp(0, height);
             let bottom = (at.y + line_height).clamp(0, height);
             for y in top..bottom {
@@ -233,6 +250,19 @@ impl Renderer {
         for (pixel, done) in pixels.iter_mut().zip(&converted) {
             if !done {
                 *pixel = idle;
+            }
+        }
+        // Fainter than the text, so the lines divide the items without competing with them.
+        const SEPARATOR_COVERAGE: u8 = 96;
+        let line = compose(SEPARATOR_COVERAGE, style.separator, background);
+        let line_width = scale(1).max(1);
+        let top = placed.top.clamp(0, height);
+        let bottom = (placed.top + line_height * style.rows as i32).clamp(0, height);
+        for &left in &placed.separators {
+            for y in top..bottom {
+                for x in left.clamp(0, width)..(left + line_width).clamp(0, width) {
+                    pixels[(y * width + x) as usize] = line;
+                }
             }
         }
         (width, height)
@@ -268,16 +298,33 @@ mod tests {
 
     #[test]
     fn layout_fills_columns_and_centers_vertically() {
-        let (cells, width) = layout(&[(10, 30), (12, 20), (8, 10)], 2, 15, 48, 4, 4);
-        assert_eq!(cells[0], CellLayout { x: 4, y: 9, width: 46, label_width: 12 });
-        assert_eq!(cells[1], CellLayout { x: 4, y: 24, width: 46, label_width: 12 });
-        assert_eq!(cells[2], CellLayout { x: 58, y: 9, width: 22, label_width: 8 });
-        assert_eq!(width, 84);
+        let placed = layout(&[(10, 30), (12, 20), (8, 10)], 2, 15, 48, 4, 4);
+        assert_eq!(placed.cells[0], CellLayout { x: 4, y: 9, width: 46 });
+        assert_eq!(placed.cells[1], CellLayout { x: 4, y: 24, width: 46 });
+        assert_eq!(placed.cells[2], CellLayout { x: 62, y: 9, width: 22 });
+        assert_eq!(placed.top, 9);
+        assert_eq!(placed.width, 88);
+    }
+
+    #[test]
+    fn separators_sit_midway_between_columns_only() {
+        assert_eq!(layout(&[(10, 30), (8, 10)], 1, 15, 48, 4, 4).separators, vec![54]);
+        assert!(layout(&[(10, 30), (8, 10)], 2, 15, 48, 4, 4).separators.is_empty());
     }
 
     #[test]
     fn empty_layout_has_no_width() {
-        assert_eq!(layout(&[], 2, 15, 48, 4, 4).1, 0);
+        let placed = layout(&[], 2, 15, 48, 4, 4);
+        assert_eq!(placed.width, 0);
+        assert!(placed.separators.is_empty());
+    }
+
+    #[test]
+    fn label_and_value_are_centered_as_a_pair() {
+        // 4% in a cell that reserves room for 100%: equal margins on both sides.
+        assert_eq!(center_in_cell(10, 60, 20, 16, 4), (20, 44));
+        // The widest value fills the cell.
+        assert_eq!(center_in_cell(10, 60, 20, 36, 4), (10, 34));
     }
 
     #[test]
