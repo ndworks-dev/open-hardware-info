@@ -10,15 +10,11 @@ use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, LPARAM};
-use windows_sys::Win32::Graphics::Gdi::{
-    EnumFontFamiliesExW, GetDC, ReleaseDC, DEFAULT_CHARSET, LOGFONTW, TEXTMETRICW,
-};
+use windows_sys::Win32::Graphics::Gdi::{EnumFontFamiliesExW, GetDC, ReleaseDC, DEFAULT_CHARSET, LOGFONTW, TEXTMETRICW};
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::Controls::Dialogs::{ChooseColorW, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, PostMessageW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOWNORMAL,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOWNORMAL};
 
 slint::include_modules!();
 
@@ -44,12 +40,7 @@ fn stamp_of(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-unsafe extern "system" fn collect_font(
-    font: *const LOGFONTW,
-    _metrics: *const TEXTMETRICW,
-    _kind: u32,
-    list: LPARAM,
-) -> i32 {
+unsafe extern "system" fn collect_font(font: *const LOGFONTW, _metrics: *const TEXTMETRICW, _kind: u32, list: LPARAM) -> i32 {
     let face = &(*font).lfFaceName;
     let end = face.iter().position(|&c| c == 0).unwrap_or(face.len());
     (*(list as *mut Vec<String>)).push(String::from_utf16_lossy(&face[..end]));
@@ -129,11 +120,7 @@ fn populate(ui: &SettingsWindow, state: &mut State) {
     });
     ui.set_layout_index(layout_index(config.rows));
     ui.set_text_color(if config.text_color == "auto" { "".into() } else { config.text_color.as_str().into() });
-    ui.set_background_color(if config.background == "transparent" {
-        "".into()
-    } else {
-        config.background.as_str().into()
-    });
+    ui.set_background_color(if config.background == "transparent" { "".into() } else { config.background.as_str().into() });
     ui.set_items(ModelRc::new(VecModel::from(item_rows(config))));
 
     let taskbars = taskbar::enumerate();
@@ -149,9 +136,7 @@ fn populate(ui: &SettingsWindow, state: &mut State) {
         monitor_names.push(format!("{} (não encontrado)", config.monitor));
     }
     ui.set_monitor_names(string_model(monitor_names));
-    ui.set_monitor_index(
-        monitor_values.iter().position(|m| m.eq_ignore_ascii_case(&config.monitor)).unwrap_or(0) as i32,
-    );
+    ui.set_monitor_index(monitor_values.iter().position(|m| m.eq_ignore_ascii_case(&config.monitor)).unwrap_or(0) as i32);
     state.choices.monitors = monitor_values;
 
     ui.set_anchor_index(if config.anchor == Anchor::Left { 0 } else { 1 });
@@ -270,11 +255,9 @@ fn reload(ui: &SettingsWindow, state: &mut State) {
     let error = load(state);
     populate(ui, state);
     match error {
-        Some(error) => show_message(
-            ui,
-            &format!("O config.toml tem um erro e nada será salvo até corrigi-lo ou restaurar os padrões.\n{error}"),
-            true,
-        ),
+        Some(error) => {
+            show_message(ui, &format!("O config.toml tem um erro e nada será salvo até corrigi-lo ou restaurar os padrões.\n{error}"), true)
+        }
         None => show_message(ui, "", false),
     }
 }

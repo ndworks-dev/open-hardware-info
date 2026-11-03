@@ -7,12 +7,10 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows_sys::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfTable2, MIB_IF_TABLE2};
-use windows_sys::Win32::System::LibraryLoader::{
-    GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
-};
+use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
 use windows_sys::Win32::System::Performance::{
-    PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterValue,
-    PdhOpenQueryW, PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE,
+    PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterValue, PdhOpenQueryW, PDH_FMT_COUNTERVALUE,
+    PDH_FMT_DOUBLE,
 };
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
@@ -30,16 +28,8 @@ pub enum Metric {
 }
 
 impl Metric {
-    pub const ALL: &'static [Metric] = &[
-        Metric::NetDown,
-        Metric::NetUp,
-        Metric::Cpu,
-        Metric::Ram,
-        Metric::Gpu,
-        Metric::GpuTemp,
-        Metric::Vram,
-        Metric::Disk,
-    ];
+    pub const ALL: &'static [Metric] =
+        &[Metric::NetDown, Metric::NetUp, Metric::Cpu, Metric::Ram, Metric::Gpu, Metric::GpuTemp, Metric::Vram, Metric::Disk];
 
     pub fn default_enabled(self) -> bool {
         !matches!(self, Metric::Vram | Metric::Disk)
@@ -147,9 +137,7 @@ pub struct IfCounters {
 /// so neither shows up as a huge spike.
 pub fn counter_delta(previous: &HashMap<u64, (u64, u64)>, current: &[IfCounters]) -> (u64, u64) {
     current.iter().fold((0, 0), |(rx, tx), c| match previous.get(&c.luid) {
-        Some(&(prev_rx, prev_tx)) => {
-            (rx + c.rx.saturating_sub(prev_rx), tx + c.tx.saturating_sub(prev_tx))
-        }
+        Some(&(prev_rx, prev_tx)) => (rx + c.rx.saturating_sub(prev_rx), tx + c.tx.saturating_sub(prev_tx)),
         None => (rx, tx),
     })
 }
@@ -216,8 +204,7 @@ impl Pdh {
             let add = |path: &str| -> Option<isize> {
                 let wide = crate::wide(path);
                 let mut counter = std::mem::zeroed();
-                (PdhAddEnglishCounterW(query, wide.as_ptr(), 0, &mut counter) == 0)
-                    .then_some(counter as isize)
+                (PdhAddEnglishCounterW(query, wide.as_ptr(), 0, &mut counter) == 0).then_some(counter as isize)
             };
             let cpu = add(r"\Processor Information(_Total)\% Processor Utility");
             let disk_idle = add(r"\PhysicalDisk(_Total)\% Idle Time");
@@ -247,12 +234,7 @@ impl Drop for Pdh {
 fn read_counter(counter: isize) -> Option<f64> {
     unsafe {
         let mut value: PDH_FMT_COUNTERVALUE = std::mem::zeroed();
-        let status = PdhGetFormattedCounterValue(
-            counter as _,
-            PDH_FMT_DOUBLE,
-            std::ptr::null_mut(),
-            &mut value,
-        );
+        let status = PdhGetFormattedCounterValue(counter as _, PDH_FMT_DOUBLE, std::ptr::null_mut(), &mut value);
         (status == 0 && value.CStatus == 0).then(|| value.Anonymous.doubleValue)
     }
 }
@@ -310,8 +292,7 @@ impl Nvml {
             };
         }
         let init: unsafe extern "system" fn() -> u32 = symbol!("nvmlInit_v2");
-        let by_index: unsafe extern "system" fn(u32, *mut Device) -> u32 =
-            symbol!("nvmlDeviceGetHandleByIndex_v2");
+        let by_index: unsafe extern "system" fn(u32, *mut Device) -> u32 = symbol!("nvmlDeviceGetHandleByIndex_v2");
         let utilization = symbol!("nvmlDeviceGetUtilizationRates");
         let temperature = symbol!("nvmlDeviceGetTemperature");
         let memory = symbol!("nvmlDeviceGetMemoryInfo");
@@ -378,13 +359,7 @@ pub struct Sampler {
 
 impl Sampler {
     pub fn new(adapter: String) -> Sampler {
-        Sampler {
-            adapter,
-            pdh: Pdh::open(),
-            nvml: Nvml::load(),
-            net_previous: HashMap::new(),
-            net_time: None,
-        }
+        Sampler { adapter, pdh: Pdh::open(), nvml: Nvml::load(), net_previous: HashMap::new(), net_time: None }
     }
 
     pub fn set_adapter(&mut self, adapter: String) {
@@ -431,11 +406,7 @@ pub enum Command {
 /// Samples on its own thread: slow sensors must never stall the UI thread, whose
 /// window lives inside the taskbar and shares its input queue with Explorer.
 /// Dropping the returned sender stops the thread.
-pub fn spawn(
-    interval: Duration,
-    adapter: String,
-    notify: impl Fn() + Send + 'static,
-) -> (Sender<Command>, Receiver<Snapshot>) {
+pub fn spawn(interval: Duration, adapter: String, notify: impl Fn() + Send + 'static) -> (Sender<Command>, Receiver<Snapshot>) {
     let (command_tx, command_rx) = mpsc::channel();
     let (snapshot_tx, snapshot_rx) = mpsc::channel();
     std::thread::spawn(move || {

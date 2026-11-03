@@ -90,15 +90,7 @@ impl Default for Config {
             text_color: "auto".into(),
             background: "transparent".into(),
             adapter: String::new(),
-            items: Metric::ALL
-                .iter()
-                .map(|&metric| Item {
-                    metric,
-                    enabled: metric.default_enabled(),
-                    label: None,
-                    color: None,
-                })
-                .collect(),
+            items: Metric::ALL.iter().map(|&metric| Item { metric, enabled: metric.default_enabled(), label: None, color: None }).collect(),
         }
     }
 }
@@ -224,10 +216,8 @@ mod tests {
 
     #[test]
     fn duplicates_are_dropped_and_ranges_clamped() {
-        let cfg = Config::parse(
-            "interval_ms = 1\nrows = 9\n[[items]]\nmetric = \"cpu\"\n[[items]]\nmetric = \"cpu\"\nenabled = false\n",
-        )
-        .unwrap();
+        let cfg = Config::parse("interval_ms = 1\nrows = 9\n[[items]]\nmetric = \"cpu\"\n[[items]]\nmetric = \"cpu\"\nenabled = false\n")
+            .unwrap();
         assert_eq!(cfg.interval_ms, 250);
         assert_eq!(cfg.rows, 3);
         assert_eq!(cfg.items.iter().filter(|i| i.metric == Metric::Cpu).count(), 1);

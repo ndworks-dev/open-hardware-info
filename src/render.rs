@@ -17,12 +17,7 @@ pub fn system_font_name() -> String {
     unsafe {
         let mut metrics: NONCLIENTMETRICSW = std::mem::zeroed();
         metrics.cbSize = std::mem::size_of::<NONCLIENTMETRICSW>() as u32;
-        let ok = SystemParametersInfoW(
-            SPI_GETNONCLIENTMETRICS,
-            metrics.cbSize,
-            &mut metrics as *mut _ as *mut _,
-            0,
-        ) != 0;
+        let ok = SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, metrics.cbSize, &mut metrics as *mut _ as *mut _, 0) != 0;
         let face = &metrics.lfMessageFont.lfFaceName;
         let end = face.iter().position(|&c| c == 0).unwrap_or(face.len());
         if ok && end > 0 {
@@ -62,14 +57,7 @@ pub struct CellLayout {
 /// Places cells top to bottom in columns of `rows`, vertically centered.
 /// `sizes` is (label width, value width reserved) per cell. Returns the cells
 /// and the total width.
-pub fn layout(
-    sizes: &[(i32, i32)],
-    rows: usize,
-    line_height: i32,
-    height: i32,
-    gap: i32,
-    padding: i32,
-) -> (Vec<CellLayout>, i32) {
+pub fn layout(sizes: &[(i32, i32)], rows: usize, line_height: i32, height: i32, gap: i32, padding: i32) -> (Vec<CellLayout>, i32) {
     let mut cells = Vec::with_capacity(sizes.len());
     let mut x = padding;
     let top = (height - line_height * rows as i32) / 2;
@@ -93,10 +81,7 @@ pub fn compose(coverage: u8, color: Rgba, background: Rgba) -> u32 {
     let div = |v: u32| (v + 127) / 255;
     let channel = |c: u8, bg: u8| div(c as u32 * cov) + div(bg as u32 * inv);
     let a = cov + div(background.a as u32 * inv);
-    (a << 24)
-        | (channel(color.r, background.r) << 16)
-        | (channel(color.g, background.g) << 8)
-        | channel(color.b, background.b)
+    (a << 24) | (channel(color.r, background.r) << 16) | (channel(color.g, background.g) << 8) | channel(color.b, background.b)
 }
 
 /// Premultiplies a background and keeps alpha at 1 or more: fully transparent
@@ -104,12 +89,7 @@ pub fn compose(coverage: u8, color: Rgba, background: Rgba) -> u32 {
 /// answer right-clicks anywhere on it.
 pub fn clickable_background(background: Rgba) -> Rgba {
     let premultiply = |c: u8| ((c as u32 * background.a as u32 + 127) / 255) as u8;
-    Rgba {
-        r: premultiply(background.r),
-        g: premultiply(background.g),
-        b: premultiply(background.b),
-        a: background.a.max(1),
-    }
+    Rgba { r: premultiply(background.r), g: premultiply(background.g), b: premultiply(background.b), a: background.a.max(1) }
 }
 
 pub struct Renderer {
@@ -128,14 +108,7 @@ impl Renderer {
             SetBkMode(dc, TRANSPARENT as _);
             SetTextColor(dc, 0x00FF_FFFF);
         }
-        Renderer {
-            dc,
-            font: null_mut(),
-            font_key: (String::new(), 0, 0),
-            bitmap: null_mut(),
-            bits: null_mut(),
-            size: (0, 0),
-        }
+        Renderer { dc, font: null_mut(), font_key: (String::new(), 0, 0), bitmap: null_mut(), bits: null_mut(), size: (0, 0) }
     }
 
     fn set_font(&mut self, face: &str, points: f32, weight: FontWeight, dpi: u32) {
@@ -224,10 +197,8 @@ impl Renderer {
         self.set_font(style.font, style.font_size, style.font_weight, dpi);
         let scale = |dips: i32| dips * dpi as i32 / 96;
         let line_height = self.measure("Ag").1;
-        let sizes: Vec<(i32, i32)> = cells
-            .iter()
-            .map(|c| (self.measure(&c.label).0, self.measure(c.template).0.max(self.measure(&c.value).0)))
-            .collect();
+        let sizes: Vec<(i32, i32)> =
+            cells.iter().map(|c| (self.measure(&c.label).0, self.measure(c.template).0.max(self.measure(&c.value).0))).collect();
         let gap = scale(4);
         let (placed, width) = layout(&sizes, style.rows, line_height, height, gap, gap);
         let width = width.max(1);
@@ -237,11 +208,7 @@ impl Renderer {
         pixels.fill(0);
         for (cell, at) in cells.iter().zip(&placed) {
             self.draw_text(at.x, at.y, &cell.label);
-            let value_x = if cell.align_left {
-                at.x + at.label_width + gap
-            } else {
-                at.x + at.width - self.measure(&cell.value).0
-            };
+            let value_x = if cell.align_left { at.x + at.label_width + gap } else { at.x + at.width - self.measure(&cell.value).0 };
             self.draw_text(value_x, at.y, &cell.value);
         }
         unsafe {
@@ -274,15 +241,8 @@ impl Renderer {
     pub fn present(&self, hwnd: HWND) -> bool {
         let size = SIZE { cx: self.size.0, cy: self.size.1 };
         let source = POINT { x: 0, y: 0 };
-        let blend = BLENDFUNCTION {
-            BlendOp: AC_SRC_OVER as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: AC_SRC_ALPHA as u8,
-        };
-        unsafe {
-            UpdateLayeredWindow(hwnd, null_mut(), null(), &size, self.dc, &source, 0, &blend, ULW_ALPHA) != 0
-        }
+        let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
+        unsafe { UpdateLayeredWindow(hwnd, null_mut(), null(), &size, self.dc, &source, 0, &blend, ULW_ALPHA) != 0 }
     }
 }
 

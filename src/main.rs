@@ -23,8 +23,7 @@ use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Shell::{
-    ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NOTIFYICONDATAW,
+    ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -219,11 +218,7 @@ impl App {
                 value: item.metric.format(self.snapshot.value(item.metric)),
                 template: item.metric.template(),
                 align_left: matches!(item.metric, Metric::NetDown | Metric::NetUp),
-                color: item
-                    .color
-                    .as_deref()
-                    .and_then(|c| Rgba::parse(c).ok())
-                    .unwrap_or(default_color),
+                color: item.color.as_deref().and_then(|c| Rgba::parse(c).ok()).unwrap_or(default_color),
             })
             .collect();
         if cells.is_empty() {
@@ -424,15 +419,7 @@ fn show_menu(main: HWND) {
         let mut at = POINT { x: 0, y: 0 };
         GetCursorPos(&mut at);
         SetForegroundWindow(main); // otherwise the menu ignores clicks outside it
-        let command = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
-            at.x,
-            at.y,
-            0,
-            main,
-            null(),
-        );
+        let command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, at.x, at.y, 0, main, null());
         PostMessageW(main, WM_NULL, 0, 0);
         DestroyMenu(menu);
         command
@@ -536,12 +523,8 @@ fn main() {
         print_sample();
         return;
     }
-    let config_path = args
-        .iter()
-        .position(|a| a == "--config")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from)
-        .unwrap_or_else(config::default_path);
+    let config_path =
+        args.iter().position(|a| a == "--config").and_then(|i| args.get(i + 1)).map(PathBuf::from).unwrap_or_else(config::default_path);
 
     if args.iter().any(|a| a == "--settings") {
         settings::run(config_path);
@@ -587,13 +570,9 @@ fn main() {
 
     let (config, config_error) = load_config(&config_path);
     let main_handle = main as isize;
-    let (commands, samples) = metrics::spawn(
-        Duration::from_millis(config.interval_ms),
-        config.adapter.clone(),
-        move || unsafe {
-            PostMessageW(main_handle as HWND, WM_APP_SAMPLE, 0, 0);
-        },
-    );
+    let (commands, samples) = metrics::spawn(Duration::from_millis(config.interval_ms), config.adapter.clone(), move || unsafe {
+        PostMessageW(main_handle as HWND, WM_APP_SAMPLE, 0, 0);
+    });
     let app = App {
         main,
         widget: null_mut(),

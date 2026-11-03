@@ -3,12 +3,8 @@
 use crate::config::Anchor;
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
-use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
-};
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetWindowRect,
-};
+use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST};
+use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetWindowRect};
 
 #[derive(Clone)]
 pub struct Taskbar {
@@ -109,14 +105,7 @@ pub fn select<'a>(taskbars: &'a [Taskbar], monitor: &str) -> Option<&'a Taskbar>
 
 /// Left edge of the widget in the taskbar's coordinates. All lengths are
 /// physical pixels. The result is kept inside the taskbar.
-pub fn place_x(
-    anchor: Anchor,
-    taskbar_width: i32,
-    tray_left: Option<i32>,
-    widget_width: i32,
-    offset: i32,
-    secondary_reserve: i32,
-) -> i32 {
+pub fn place_x(anchor: Anchor, taskbar_width: i32, tray_left: Option<i32>, widget_width: i32, offset: i32, secondary_reserve: i32) -> i32 {
     let x = match anchor {
         Anchor::Left => offset,
         Anchor::Right => tray_left.unwrap_or(taskbar_width - secondary_reserve) - widget_width - offset,
