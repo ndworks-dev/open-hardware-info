@@ -27,7 +27,9 @@ A desinstalação mantém suas configurações em `%APPDATA%\OpenHardwareInfo`.
 
 Ler esse sensor exige acesso ao kernel, então a temperatura depende de dois componentes que o app não instala sozinho: o driver PawnIO e o serviço `ohi-sensor`, em `%ProgramFiles%\OpenHardwareInfo`. O app continua sem privilégios e só lê o valor que o serviço publica.
 
-Para instalar ou remover, abra o PowerShell como administrador:
+Na primeira instalação, o instalador pergunta se você quer esses componentes. Depois, use o link "Instalar" na linha "Temperatura da CPU", na aba Itens das configurações. Os dois caminhos pedem confirmação e permissão de administrador, e baixam os arquivos do GitHub.
+
+Para instalar ou remover pela linha de comando, abra o PowerShell como administrador:
 
 ```powershell
 & ([scriptblock]::Create((irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1))) -InstallCpuTemp
