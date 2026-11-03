@@ -4,18 +4,30 @@ Monitor de recursos que mostra rede, CPU, memória, GPU e disco direto na barra 
 
 Inspirado no [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor), mas sem driver de kernel: o projeto não usa `WinRing0` nem LibreHardwareMonitor, que é o que faz o Windows Defender bloquear esse tipo de ferramenta. É um único `.exe`, sem DLL própria e sem exigir administrador.
 
-## Como usar
+## Instalação
 
-Requer Rust, as ferramentas de build do Visual Studio e o Windows SDK.
+No PowerShell, sem precisar de administrador:
 
 ```powershell
-cargo build --release
-.\target\release\open-hardware-info.exe
+irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1 | iex
 ```
+
+O mesmo comando atualiza uma instalação existente. O instalador baixa a última release, confere o SHA-256, instala em `%LOCALAPPDATA%\Programs\OpenHardwareInfo`, cria um atalho no menu Iniciar e abre o app.
+
+Para instalar uma versão específica ou desinstalar:
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1))) -Version 0.2.0
+& ([scriptblock]::Create((irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1))) -Uninstall
+```
+
+A desinstalação mantém suas configurações em `%APPDATA%\OpenHardwareInfo`.
+
+## Como usar
 
 Clique com o botão direito no widget ou no ícone da bandeja para abrir o menu rápido. Para ajustar tudo, escolha "Configurações..." no menu ou dê dois cliques no ícone da bandeja. As mudanças aparecem na barra enquanto você edita.
 
-`--print-sample` imprime uma leitura dos sensores, `--settings` abre só a janela de configurações, e `--config <arquivo>` usa outro arquivo de configuração.
+`--print-sample` imprime uma leitura dos sensores, `--settings` abre só a janela de configurações, `--quit` fecha o app em execução, e `--config <arquivo>` usa outro arquivo de configuração.
 
 ## Métricas
 
@@ -61,11 +73,34 @@ As leituras rodam em uma thread separada, porque a janela compartilha a fila de 
 
 A janela de configurações é feita com [Slint](https://slint.dev) e roda em um processo separado do mesmo `.exe`, que só existe enquanto ela está aberta. Ela grava o `config.toml`, e o widget aplica cada alteração. O Slint é usado sob a licença Royalty-free 2.0, com a atribuição exibida na aba "Sobre".
 
-## Testes
+## Compilação
+
+Requer Rust, as ferramentas de build do Visual Studio e o Windows SDK.
 
 ```powershell
+cargo build --release
+.\target\release\open-hardware-info.exe
 cargo test
 ```
+
+## Releases
+
+`.github/workflows/release.yml` compila, verifica e testa cada push e pull request. Quando um push na `main` contém commits que justificam uma release, ele cria a tag `vX.Y.Z` e publica uma release no GitHub com:
+
+- `OpenHardwareInfo-X.Y.Z-windows-x64.zip`: o executável
+- `install.ps1`
+- `SHA256SUMS.txt`
+
+A versão sai dos [Conventional Commits](https://www.conventionalcommits.org/) desde a última tag (`scripts/release-version.sh`):
+
+| Commits desde a última release | Próxima versão |
+| --- | --- |
+| Mudança incompatível (`feat!:` ou rodapé `BREAKING CHANGE:`) | major; minor enquanto estiver abaixo de 1.0 |
+| Pelo menos um `feat` | minor |
+| `fix` ou `perf` | patch |
+| Só `docs`, `chore`, `ci`, `refactor`, `test`, `build` | sem release |
+
+A primeira release usa a versão do `Cargo.toml`. Para pular para uma versão específica, aumente-a no `Cargo.toml`: uma versão manual maior sempre vence. A CI grava a versão da release no executável, sem alterar o `Cargo.toml` do repositório. Releases são feitas só pela CI, nunca crie tags `v*` à mão.
 
 ## Licença
 
