@@ -66,13 +66,18 @@ impl Metric {
             Metric::NetDown => "Download",
             Metric::NetUp => "Upload",
             Metric::Cpu => "Uso da CPU",
-            Metric::CpuTemp => "Temperatura da CPU (requer PawnIO)",
+            Metric::CpuTemp => "Temperatura da CPU",
             Metric::Ram => "Uso da memória",
             Metric::Gpu => "Uso da GPU",
             Metric::GpuTemp => "Temperatura da GPU",
             Metric::Vram => "Uso da memória da GPU",
             Metric::Disk => "Atividade do disco",
         }
+    }
+
+    /// What the metric needs beyond the app itself, shown under its name in settings.
+    pub fn requirement(self) -> Option<&'static str> {
+        matches!(self, Metric::CpuTemp).then_some("Requer PawnIO")
     }
 
     /// Widest expected value: reserves column width so text does not jitter.

@@ -96,6 +96,7 @@ fn item_rows(config: &Config) -> Vec<ItemRow> {
         .iter()
         .map(|item| ItemRow {
             name: item.metric.menu_label().into(),
+            hint: item.metric.requirement().unwrap_or_default().into(),
             enabled: item.enabled,
             label: item.label.clone().unwrap_or_default().into(),
             default_label: item.metric.default_label().into(),

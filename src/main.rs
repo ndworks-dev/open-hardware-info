@@ -530,7 +530,7 @@ fn print_sample() {
     std::thread::sleep(Duration::from_secs(1));
     let snapshot = sampler.sample();
     for &metric in Metric::ALL {
-        println!("{:<36}{}", metric.menu_label(), metric.format(snapshot.value(metric)));
+        println!("{:<24}{}", metric.menu_label(), metric.format(snapshot.value(metric)));
     }
 }
 
