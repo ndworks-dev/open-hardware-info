@@ -9,6 +9,11 @@ export struct ItemRow {
     color: string,
 }
 
+export struct FanPoint {
+    temp: int,
+    speed: int,
+}
+
 export global Bridge {
     pure callback parse-color(string) -> color;
     callback pick-color(string) -> string;
@@ -57,6 +62,145 @@ component ColorField inherits HorizontalLayout {
     }
 }
 
+// The chart spans these temperatures. Its right edge is where the service forces
+// the fans to 100%.
+global FanAxis {
+    out property <int> temp-min: 20;
+    out property <int> temp-span: 70;
+}
+
+component FanChart inherits Rectangle {
+    in property <[FanPoint]> points;
+    in property <bool> active;
+    callback add-point(float, float);
+    callback move-point(int, float, float);
+    callback remove-point(int);
+    callback released();
+
+    pure function chart-x(temp: int) -> float {
+        (temp - FanAxis.temp-min) / FanAxis.temp-span * root.width / 1px
+    }
+    pure function chart-y(speed: int) -> float {
+        (1 - speed / 100) * root.height / 1px
+    }
+
+    background: Palette.alternate-background;
+    border-width: 1px;
+    border-color: Palette.border;
+    opacity: root.active ? 1 : 0.5;
+
+    // Below the first point, the card controls its own fans.
+    if root.points.length > 0: Rectangle {
+        x: 0;
+        width: (root.points[0].temp - FanAxis.temp-min) / FanAxis.temp-span * root.width;
+        background: Palette.foreground.with-alpha(0.06);
+        Text {
+            text: "Automático";
+            font-size: 12px;
+            color: Palette.foreground.with-alpha(0.65);
+            visible: parent.width > 70px;
+        }
+    }
+
+    for tick in [25, 50, 75]: Rectangle {
+        y: (1 - tick / 100) * root.height;
+        height: 1px;
+        background: Palette.border;
+    }
+    for tick in [30, 40, 50, 60, 70, 80]: Rectangle {
+        x: (tick - FanAxis.temp-min) / FanAxis.temp-span * root.width;
+        width: 1px;
+        background: Palette.border;
+    }
+    for tick in [30, 50, 70]: Text {
+        x: (tick - FanAxis.temp-min) / FanAxis.temp-span * root.width + 3px;
+        y: root.height - self.height - 2px;
+        text: tick + " °C";
+        font-size: 11px;
+        color: Palette.foreground.with-alpha(0.65);
+    }
+    for tick in [25, 50, 75]: Text {
+        x: 3px;
+        y: (1 - tick / 100) * root.height + 1px;
+        text: tick + "%";
+        font-size: 11px;
+        color: Palette.foreground.with-alpha(0.65);
+    }
+
+    // In pixels: a Path keeps the proportions of its viewbox, so anything else would
+    // leave the line out of step with the points when the window changes shape.
+    for point[i] in root.points: Rectangle {
+        if i > 0: Path {
+            width: root.width;
+            height: root.height;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            stroke: Palette.accent-background;
+            stroke-width: 2px;
+            MoveTo {
+                x: root.chart-x(root.points[i - 1].temp);
+                y: root.chart-y(root.points[i - 1].speed);
+            }
+            LineTo {
+                x: root.chart-x(point.temp);
+                y: root.chart-y(point.speed);
+            }
+        }
+        // The fans hold the last speed past the last point.
+        if i == root.points.length - 1: Path {
+            width: root.width;
+            height: root.height;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            stroke: Palette.accent-background;
+            stroke-width: 2px;
+            MoveTo {
+                x: root.chart-x(point.temp);
+                y: root.chart-y(point.speed);
+            }
+            LineTo {
+                x: root.width / 1px;
+                y: root.chart-y(point.speed);
+            }
+        }
+    }
+
+    TouchArea {
+        enabled: root.active;
+        clicked => {
+            root.add-point(self.pressed-x / root.width, self.pressed-y / root.height);
+        }
+    }
+
+    for point[i] in root.points: dot := Rectangle {
+        x: (point.temp - FanAxis.temp-min) / FanAxis.temp-span * root.width - self.width / 2;
+        y: (1 - point.speed / 100) * root.height - self.height / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: Palette.accent-background;
+        border-width: 2px;
+        border-color: Palette.background;
+        TouchArea {
+            enabled: root.active;
+            mouse-cursor: move;
+            moved => {
+                if self.pressed {
+                    root.move-point(i, (dot.x + self.mouse-x) / root.width, (dot.y + self.mouse-y) / root.height);
+                }
+            }
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.up {
+                    root.released();
+                }
+            }
+            double-clicked => {
+                root.remove-point(i);
+            }
+        }
+    }
+}
+
 export component SettingsWindow inherits Window {
     title: "Open Hardware Info - Configurações";
     icon: @image-url("../assets/icon-64.png");
@@ -77,6 +221,15 @@ export component SettingsWindow inherits Window {
     in-out property <[ItemRow]> items;
     in property <bool> sensor-installed;
     callback install-sensor();
+    // GPU fans
+    in-out property <bool> fan-enabled;
+    in-out property <[FanPoint]> fan-points;
+    in property <string> fan-status;
+    in property <bool> fan-service-ready;
+    callback install-fan-control();
+    callback fan-add-point(float, float);
+    callback fan-move-point(int, float, float);
+    callback fan-remove-point(int);
     // Position
     in property <[string]> monitor-names;
     in-out property <int> monitor-index;
@@ -241,6 +394,44 @@ export component SettingsWindow inherits Window {
                             }
                         }
                     }
+                }
+            }
+
+            Tab {
+                title: "Fans";
+                VerticalBox {
+                    CheckBox {
+                        text: "Controlar os fans da GPU com esta curva";
+                        enabled: root.fan-service-ready;
+                        checked <=> root.fan-enabled;
+                        toggled => { root.changed(); }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Hint { text: root.fan-status; }
+                        if !root.fan-service-ready: Text {
+                            text: "Instalar";
+                            font-size: 12px;
+                            color: Palette.accent-background;
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.install-fan-control(); }
+                            }
+                        }
+                    }
+                    FanChart {
+                        vertical-stretch: 1;
+                        min-height: 150px;
+                        points: root.fan-points;
+                        active: root.fan-service-ready;
+                        add-point(x, y) => { root.fan-add-point(x, y); }
+                        move-point(i, x, y) => { root.fan-move-point(i, x, y); }
+                        remove-point(i) => { root.fan-remove-point(i); }
+                        released => { root.changed(); }
+                    }
+                    Hint { text: "Arraste um ponto para ajustar. Clique no gráfico para criar um ponto, e dê dois cliques em um ponto para removê-lo."; }
+                    Hint { text: "A curva só vale com o app aberto. Ao fechá-lo, a placa volta ao próprio controle automático. A partir de 90 °C, os fans vão a 100%, seja qual for a curva. Velocidade baixa demais pode danificar a GPU."; }
                 }
             }
 

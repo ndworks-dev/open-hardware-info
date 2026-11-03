@@ -3,6 +3,7 @@
 mod autostart;
 mod config;
 mod cpu_temp;
+mod gpu_fan;
 mod metrics;
 mod render;
 #[allow(dead_code)] // Each side of the protocol uses only its half.
@@ -82,6 +83,7 @@ struct App {
     snapshot: Snapshot,
     samples: Receiver<Snapshot>,
     commands: Sender<Command>,
+    fan: gpu_fan::FanLink,
     placed: (i32, i32, i32, i32),
     menu_taskbars: Vec<Taskbar>,
     icon: HICON,
@@ -151,6 +153,9 @@ impl App {
         }
         if config.adapter != self.config.adapter {
             let _ = self.commands.send(Command::SetAdapter(config.adapter.clone()));
+        }
+        if config.gpu_fan != self.config.gpu_fan {
+            self.fan.set_curve(config.gpu_fan.active_curve());
         }
         self.config = config;
     }
@@ -594,6 +599,7 @@ fn main() {
     let (commands, samples) = metrics::spawn(Duration::from_millis(config.interval_ms), config.adapter.clone(), move || unsafe {
         PostMessageW(main_handle as HWND, WM_APP_SAMPLE, 0, 0);
     });
+    let fan = gpu_fan::FanLink::spawn(config.gpu_fan.active_curve());
     let app = App {
         main,
         widget: null_mut(),
@@ -606,6 +612,7 @@ fn main() {
         snapshot: Snapshot::default(),
         samples,
         commands,
+        fan,
         placed: (0, 0, 0, 0),
         menu_taskbars: Vec::new(),
         icon: load_tray_icon(),
@@ -628,5 +635,6 @@ fn main() {
             Shell_NotifyIconW(NIM_DELETE, &data);
         }
         app.destroy_widget();
+        app.fan.release();
     });
 }

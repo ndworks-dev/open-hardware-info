@@ -1,13 +1,17 @@
-//! Optional Windows service behind the "CPU temperature" metric. PawnIO only
-//! accepts SYSTEM and administrators, so this small binary reads the sensor and
-//! publishes the value for the unprivileged widget.
+//! Optional Windows service behind the "CPU temperature" metric and the GPU fan
+//! curve. PawnIO and changing a fan speed both need elevation, so this small
+//! binary does that work for the unprivileged widget.
 //!
 //! It runs as SYSTEM, so it must stay installed under %ProgramFiles%, never in a
-//! user-writable folder, and it takes no input from other processes.
+//! user-writable folder. Its only input from other processes is the fan curve,
+//! which it treats as untrusted.
 
 #[path = "../sensor_shared.rs"]
 #[allow(dead_code)] // Each side of the protocol uses only its half.
 mod sensor_shared;
+
+#[path = "../fan_control.rs"]
+mod fan_control;
 
 use sensor_shared::{encode, is_plausible, MAPPING_NAME, MAPPING_SIZE, SERVICE_NAME};
 use std::arch::x86_64::__cpuid;
@@ -254,6 +258,34 @@ impl Sensor {
 
 // ---------------------------------------------------------------- publisher
 
+/// Creating a Global\ object needs a privilege normal users lack, so they cannot
+/// get there first and own the mapping.
+fn create_mapping(name: &str, size: u32, sddl: &str) -> Result<(Handle, *mut c_void), u32> {
+    let sddl = wide(sddl);
+    unsafe {
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut descriptor, std::ptr::null_mut()) == 0
+        {
+            return Err(GetLastError());
+        }
+        let attributes =
+            SECURITY_ATTRIBUTES { nLength: size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: descriptor, bInheritHandle: 0 };
+        let name = wide(name);
+        let mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, &attributes, PAGE_READWRITE, 0, size, name.as_ptr());
+        let error = GetLastError();
+        LocalFree(descriptor);
+        if mapping.is_null() {
+            return Err(error);
+        }
+        let mapping = Handle(mapping);
+        let address = MapViewOfFile(mapping.0, FILE_MAP_WRITE, 0, 0, size as usize);
+        if address.Value.is_null() {
+            return Err(GetLastError());
+        }
+        Ok((mapping, address.Value))
+    }
+}
+
 struct Publisher {
     _mapping: Handle,
     word: *const AtomicU64,
@@ -261,36 +293,9 @@ struct Publisher {
 
 impl Publisher {
     fn create() -> Result<Publisher, u32> {
-        // SYSTEM has full access, signed-in users can only read. Creating a
-        // Global\ object needs a privilege normal users lack, so they cannot
-        // get there first and own the mapping.
-        let sddl = wide("D:P(A;;GA;;;SY)(A;;GR;;;AU)");
-        unsafe {
-            let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-            if ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut descriptor, std::ptr::null_mut())
-                == 0
-            {
-                return Err(GetLastError());
-            }
-            let attributes = SECURITY_ATTRIBUTES {
-                nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-                lpSecurityDescriptor: descriptor,
-                bInheritHandle: 0,
-            };
-            let name = wide(MAPPING_NAME);
-            let mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, &attributes, PAGE_READWRITE, 0, MAPPING_SIZE, name.as_ptr());
-            let error = GetLastError();
-            LocalFree(descriptor);
-            if mapping.is_null() {
-                return Err(error);
-            }
-            let mapping = Handle(mapping);
-            let address = MapViewOfFile(mapping.0, FILE_MAP_WRITE, 0, 0, MAPPING_SIZE as usize);
-            if address.Value.is_null() {
-                return Err(GetLastError());
-            }
-            Ok(Publisher { _mapping: mapping, word: address.Value as *const AtomicU64 })
-        }
+        // SYSTEM has full access, signed-in users can only read.
+        let (mapping, address) = create_mapping(MAPPING_NAME, MAPPING_SIZE, "D:P(A;;GA;;;SY)(A;;GR;;;AU)")?;
+        Ok(Publisher { _mapping: mapping, word: address.cast() })
     }
 
     fn store(&self, word: u64) {
@@ -364,13 +369,13 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
     }
     STOP_EVENT.store(stop, Ordering::Release);
 
-    let Some(cpu) = detect_cpu() else {
-        report(SERVICE_STOPPED, ERROR_NOT_SUPPORTED);
-        return;
-    };
     report(SERVICE_RUNNING, NO_ERROR);
-    let exit_code = poll(cpu, stop).err().unwrap_or(NO_ERROR);
-    report(SERVICE_STOPPED, exit_code);
+    // Separate threads, so that a slow sensor read cannot hold back the fan control.
+    let sensor = detect_cpu().map(|cpu| std::thread::spawn(move || poll(cpu, STOP_EVENT.load(Ordering::Acquire))));
+    let fans = std::thread::spawn(|| fan_control::run(STOP_EVENT.load(Ordering::Acquire)));
+    let fans = fans.join().unwrap_or(Err(ERROR_NOT_SUPPORTED));
+    let sensor = sensor.map_or(Ok(()), |thread| thread.join().unwrap_or(Err(ERROR_NOT_SUPPORTED)));
+    report(SERVICE_STOPPED, fans.and(sensor).err().unwrap_or(NO_ERROR));
 }
 
 /// One reading on stdout, to diagnose a machine from an elevated terminal.

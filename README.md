@@ -2,7 +2,7 @@
 
 Monitor de recursos que mostra rede, CPU, memória, GPU e disco direto na barra de tarefas do Windows.
 
-Inspirado no [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor), mas sem driver próprio: o projeto não usa `WinRing0` nem LibreHardwareMonitor, que é o que faz o Windows Defender bloquear esse tipo de ferramenta. O app é um único `.exe`, sem DLL própria e sem exigir administrador. Só a temperatura da CPU, que é opcional, precisa do driver [PawnIO](https://pawnio.eu) e de um pequeno serviço.
+Inspirado no [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor), mas sem driver próprio: o projeto não usa `WinRing0` nem LibreHardwareMonitor, que é o que faz o Windows Defender bloquear esse tipo de ferramenta. O app é um único `.exe`, sem DLL própria e sem exigir administrador. Só dois recursos opcionais precisam de um pequeno serviço: a temperatura da CPU, que também usa o driver [PawnIO](https://pawnio.eu), e a curva dos fans da GPU.
 
 ## Instalação
 
@@ -40,6 +40,27 @@ Depois de instalar, ative "Temperatura da CPU" nas configurações. A remoção 
 
 Alguns anti-cheats podem bloquear jogos com o PawnIO instalado. Funciona em processadores AMD Ryzen e Intel, e a leitura em Intel ainda não foi testada em hardware real.
 
+### Curva dos fans da GPU (opcional)
+
+A aba Fans das configurações controla os fans de GPUs NVIDIA por uma curva de temperatura e velocidade, como a do MSI Afterburner. O Windows exige permissão de administrador para mudar um fan, então a curva depende do mesmo serviço `ohi-sensor`, mas não do PawnIO. O app continua sem privilégios e só publica a curva para o serviço.
+
+Na primeira vez, use o link "Instalar" na aba Fans, ou abra o PowerShell como administrador:
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1))) -InstallFanControl
+& ([scriptblock]::Create((irm https://github.com/ndworks-dev/open-hardware-info/releases/latest/download/install.ps1))) -UninstallFanControl
+```
+
+O serviço é o mesmo da temperatura da CPU, então removê-lo desliga os dois recursos.
+
+- A curva só vale com o app aberto. Se ele fechar ou travar, a placa volta ao próprio controle automático em até 10 segundos.
+- Abaixo do primeiro ponto, a placa decide, então ela ainda pode parar os fans em baixa temperatura.
+- A partir de 90 °C, os fans vão a 100%, seja qual for a curva, até a GPU voltar a menos de 85 °C.
+- Se o próprio serviço travar, o Windows tenta reiniciá-lo duas vezes, e ele devolve o controle à placa ao iniciar. Se isso falhar, os fans podem ficar na última velocidade até reiniciar o Windows.
+- Velocidade baixa demais pode danificar a GPU. Não use junto com o MSI Afterburner ou outro programa que controle os fans, porque eles disputam o controle.
+
+Só a primeira GPU NVIDIA é controlada.
+
 ## Como usar
 
 Clique com o botão direito no widget ou no ícone da bandeja para abrir o menu rápido. Para ajustar tudo, escolha "Configurações..." no menu ou dê dois cliques no ícone da bandeja. As mudanças aparecem na barra enquanto você edita.
@@ -76,6 +97,10 @@ font_weight = "regular"  # ou "semibold", "bold"
 text_color = "auto"      # segue o tema do Windows, ou "#RRGGBB"
 background = "transparent" # ou "#RRGGBBAA"
 adapter = ""             # parte do nome de um adaptador; vazio soma todos
+
+[gpu_fan]
+enabled = false          # a aba Fans liga isto depois de instalar o serviço
+points = [[50, 30], [60, 40], [70, 60], [80, 80], [85, 100]] # [°C, % do fan]
 
 [[items]]                # a ordem aqui é a ordem na tela
 metric = "cpu"

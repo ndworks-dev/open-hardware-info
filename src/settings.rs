@@ -2,6 +2,8 @@
 //! and writes the config file; the widget process picks up every save.
 
 use crate::config::{Anchor, Config, FontWeight, Rgba, SYSTEM_FONT};
+use crate::gpu_fan::{self, ServiceFan};
+use crate::sensor_shared::{CurvePoint, FanState, CURVE_TEMP_MAX, CURVE_TEMP_MIN, MAX_CURVE_POINTS, MIN_CURVE_POINTS};
 use crate::{autostart, render, taskbar, wide, MAIN_CLASS, WM_APP_RELOAD};
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
@@ -39,6 +41,94 @@ struct State {
     /// restores the defaults, so their edits are not overwritten.
     blocked: bool,
     choices: Choices,
+    /// The lowest speed the card accepts, so the chart cannot promise less.
+    fan_floor: u8,
+}
+
+/// Temperature that the chart's left edge stands for. Its right edge is 90 °C.
+const CHART_TEMP_ORIGIN: i32 = 20;
+const CHART_TEMP_SPAN: f32 = 70.0;
+/// What the card reports until the service says otherwise.
+const DEFAULT_FAN_FLOOR: u8 = 30;
+
+/// A position on the chart, each axis from 0 to 1, as a temperature and a speed.
+fn chart_value(x: f32, y: f32) -> (i32, i32) {
+    (CHART_TEMP_ORIGIN + (x * CHART_TEMP_SPAN).round() as i32, ((1.0 - y) * 100.0).round() as i32)
+}
+
+/// Keeps a point valid where it would land: between its neighbors, and not below
+/// what the card accepts unless the next point already asks for less.
+fn fit_point(previous: Option<CurvePoint>, next: Option<CurvePoint>, temp: i32, speed: i32, floor: u8) -> CurvePoint {
+    let lowest_temp = previous.map_or(i32::from(CURVE_TEMP_MIN), |p| i32::from(p[0]) + 1);
+    let highest_temp = next.map_or(i32::from(CURVE_TEMP_MAX), |p| i32::from(p[0]) - 1);
+    let lowest_speed = previous.map_or(0, |p| i32::from(p[1])).max(i32::from(floor));
+    let highest_speed = next.map_or(100, |p| i32::from(p[1]));
+    [temp.max(lowest_temp).min(highest_temp) as u8, speed.max(lowest_speed).min(highest_speed) as u8]
+}
+
+pub fn move_curve_point(points: &mut [CurvePoint], index: usize, temp: i32, speed: i32, floor: u8) {
+    if index >= points.len() {
+        return;
+    }
+    let previous = index.checked_sub(1).map(|i| points[i]);
+    let next = points.get(index + 1).copied();
+    points[index] = fit_point(previous, next, temp, speed, floor);
+}
+
+/// False when the curve is full or a point already sits at that temperature.
+pub fn insert_curve_point(points: &mut Vec<CurvePoint>, temp: i32, speed: i32, floor: u8) -> bool {
+    if points.len() >= MAX_CURVE_POINTS || points.iter().any(|p| i32::from(p[0]) == temp) {
+        return false;
+    }
+    if !(i32::from(CURVE_TEMP_MIN)..=i32::from(CURVE_TEMP_MAX)).contains(&temp) {
+        return false;
+    }
+    let index = points.iter().position(|p| i32::from(p[0]) > temp).unwrap_or(points.len());
+    let previous = index.checked_sub(1).map(|i| points[i]);
+    points.insert(index, fit_point(previous, points.get(index).copied(), temp, speed, floor));
+    true
+}
+
+pub fn remove_curve_point(points: &mut Vec<CurvePoint>, index: usize) -> bool {
+    if points.len() <= MIN_CURVE_POINTS || index >= points.len() {
+        return false;
+    }
+    points.remove(index);
+    true
+}
+
+fn fan_rows(points: &[CurvePoint]) -> ModelRc<FanPoint> {
+    ModelRc::new(VecModel::from(
+        points.iter().map(|[temp, speed]| FanPoint { temp: i32::from(*temp), speed: i32::from(*speed) }).collect::<Vec<_>>(),
+    ))
+}
+
+fn form_curve(ui: &SettingsWindow) -> Vec<CurvePoint> {
+    ui.get_fan_points().iter().map(|point| [point.temp as u8, point.speed as u8]).collect()
+}
+
+fn fan_status_text(service: Option<&ServiceFan>) -> String {
+    let Some(service) = service else {
+        return "Requer o serviço do Open Hardware Info, que não está instalado ou está desatualizado.".to_owned();
+    };
+    let Some(status) = service.status else {
+        return "O serviço não está respondendo. A placa está no controle automático.".to_owned();
+    };
+    match status.state {
+        FanState::Automatic => format!("Controle automático da placa: fans a {}%, GPU a {} °C.", status.speed, status.temp),
+        FanState::Curve => format!("Curva ativa: fans a {}%, GPU a {} °C.", status.speed, status.temp),
+        FanState::Emergency => format!("Proteção ativa: fans a {}%, GPU a {} °C.", status.speed, status.temp),
+        FanState::Failed => "Sem controle: nenhuma GPU NVIDIA compatível respondeu. A placa segue no controle automático.".to_owned(),
+    }
+}
+
+fn refresh_fan_service(ui: &SettingsWindow, state: &mut State) {
+    let service = gpu_fan::read_service();
+    ui.set_fan_service_ready(service.is_some());
+    ui.set_fan_status(fan_status_text(service.as_ref()).into());
+    if let Some(min_speed) = service.and_then(|s| (s.min_speed > 0).then_some(s.min_speed)) {
+        state.fan_floor = min_speed;
+    }
 }
 
 fn stamp_of(path: &Path) -> Option<SystemTime> {
@@ -128,6 +218,8 @@ fn populate(ui: &SettingsWindow, state: &mut State) {
     ui.set_text_color(if config.text_color == "auto" { "".into() } else { config.text_color.as_str().into() });
     ui.set_background_color(if config.background == "transparent" { "".into() } else { config.background.as_str().into() });
     ui.set_items(ModelRc::new(VecModel::from(item_rows(config))));
+    ui.set_fan_enabled(config.gpu_fan.enabled);
+    ui.set_fan_points(fan_rows(&config.gpu_fan.points));
 
     let taskbars = taskbar::enumerate();
     let mut monitor_values = vec!["primary".to_owned()];
@@ -184,6 +276,8 @@ fn read_form(ui: &SettingsWindow, base: &Config, choices: &Choices) -> Config {
     config.secondary_reserve = ui.get_secondary_reserve();
     config.interval_ms = ui.get_interval() as u64;
     config.adapter = ui.get_adapter().trim().to_owned();
+    config.gpu_fan.enabled = ui.get_fan_enabled();
+    config.gpu_fan.points = form_curve(ui);
     let rows = ui.get_items();
     for (item, row) in config.items.iter_mut().zip(rows.iter()) {
         item.enabled = row.enabled;
@@ -295,10 +389,10 @@ fn pick_color(current: &str) -> String {
 /// PowerShell for the elevated install: the installer of this exact release,
 /// which verifies what it downloads. The window stays open so the user can read
 /// the result, such as a request to restart Windows.
-fn install_command(version: &str) -> String {
+fn install_command(version: &str, switch: &str) -> String {
     format!(
         "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; \
-         try {{ & ([scriptblock]::Create((irm 'https://github.com/{REPOSITORY}/releases/download/v{version}/install.ps1'))) -InstallCpuTemp -Version {version} }} \
+         try {{ & ([scriptblock]::Create((irm 'https://github.com/{REPOSITORY}/releases/download/v{version}/install.ps1'))) {switch} -Version {version} }} \
          catch {{ Write-Host $_ -ForegroundColor Red }} \
          finally {{ Read-Host 'Press Enter to close' }}"
     )
@@ -306,13 +400,9 @@ fn install_command(version: &str) -> String {
 
 /// Asks for consent, then for elevation. This app stays unprivileged and copies
 /// nothing itself: a user-writable executable must never feed a SYSTEM service.
-fn install_sensor(ui: &SettingsWindow) {
+fn install_service(ui: &SettingsWindow, consent: &str, switch: &str) {
     const USER_CANCELLED_ELEVATION: isize = 5;
-    let text = wide(
-        "Para ler a temperatura da CPU, o Windows precisa do driver de kernel PawnIO e de um pequeno serviço do Open Hardware Info. \
-         A instalação baixa os dois do GitHub e pede permissão de administrador.\n\n\
-         Alguns anti-cheats podem bloquear jogos com o PawnIO instalado.\n\nDeseja instalar?",
-    );
+    let text = wide(consent);
     let title = wide(WINDOW_TITLE);
     let owner = unsafe { FindWindowW(null(), title.as_ptr()) };
     if unsafe { MessageBoxW(owner, text.as_ptr(), title.as_ptr(), MB_YESNO | MB_ICONINFORMATION | MB_DEFBUTTON2) } != IDYES {
@@ -321,13 +411,38 @@ fn install_sensor(ui: &SettingsWindow) {
     let mut system = [0u16; 260];
     let length = unsafe { GetSystemDirectoryW(system.as_mut_ptr(), system.len() as u32) } as usize;
     let powershell = String::from_utf16_lossy(&system[..length.min(system.len())]) + r"\WindowsPowerShell\v1.0\powershell.exe";
-    let arguments = format!("-NoProfile -ExecutionPolicy Bypass -Command \"{}\"", install_command(env!("CARGO_PKG_VERSION")));
+    let arguments = format!("-NoProfile -ExecutionPolicy Bypass -Command \"{}\"", install_command(env!("CARGO_PKG_VERSION"), switch));
     let result = unsafe {
         ShellExecuteW(owner, wide("runas").as_ptr(), wide(&powershell).as_ptr(), wide(&arguments).as_ptr(), null(), SW_SHOWNORMAL) as isize
     };
     if result <= 32 && result != USER_CANCELLED_ELEVATION {
         show_message(ui, "Não foi possível iniciar a instalação.", true);
     }
+}
+
+fn install_sensor(ui: &SettingsWindow) {
+    install_service(
+        ui,
+        "Para ler a temperatura da CPU, o Windows precisa do driver de kernel PawnIO e de um pequeno serviço do Open Hardware Info. \
+         A instalação baixa os dois do GitHub e pede permissão de administrador.\n\n\
+         Alguns anti-cheats podem bloquear jogos com o PawnIO instalado.\n\nDeseja instalar?",
+        "-InstallCpuTemp",
+    );
+}
+
+fn install_fan_control(ui: &SettingsWindow) {
+    install_service(
+        ui,
+        "Para mudar a velocidade dos fans, o Windows exige permissão de administrador, que fica com um pequeno serviço do Open Hardware Info. \
+         A instalação baixa o serviço do GitHub e pede essa permissão. Ela não instala o PawnIO.\n\n\
+         Só funciona com GPUs NVIDIA, e não use junto com o MSI Afterburner ou outro programa que controle os fans.\n\nDeseja instalar?",
+        "-InstallFanControl",
+    );
+}
+
+/// The service alone is not enough: it may be there only for the GPU fans.
+fn sensor_ready() -> bool {
+    crate::cpu_temp::service_installed() && crate::cpu_temp::pawnio_installed()
 }
 
 pub fn run(path: PathBuf) {
@@ -360,8 +475,10 @@ pub fn run(path: PathBuf) {
         stamp: None,
         blocked: false,
         choices: Choices { fonts: Vec::new(), monitors: Vec::new() },
+        fan_floor: DEFAULT_FAN_FLOOR,
     }));
     reload(&ui, &mut state.borrow_mut());
+    refresh_fan_service(&ui, &mut state.borrow_mut());
 
     ui.on_changed({
         let (ui, state) = (ui.as_weak(), state.clone());
@@ -399,12 +516,57 @@ pub fn run(path: PathBuf) {
             }
         }
     });
-    ui.set_sensor_installed(crate::cpu_temp::service_installed());
+    ui.set_sensor_installed(sensor_ready());
     ui.on_install_sensor({
         let ui = ui.as_weak();
         move || {
             if let Some(ui) = ui.upgrade() {
                 install_sensor(&ui);
+            }
+        }
+    });
+    ui.on_install_fan_control({
+        let ui = ui.as_weak();
+        move || {
+            if let Some(ui) = ui.upgrade() {
+                install_fan_control(&ui);
+            }
+        }
+    });
+    // Saved when the point is released, not on every step of the drag.
+    ui.on_fan_move_point({
+        let (ui, state) = (ui.as_weak(), state.clone());
+        move |index, x, y| {
+            let Some(ui) = ui.upgrade() else { return };
+            let floor = state.borrow().fan_floor;
+            let mut points = form_curve(&ui);
+            let (temp, speed) = chart_value(x, y);
+            move_curve_point(&mut points, index as usize, temp, speed, floor);
+            let [temp, speed] = points[index as usize];
+            ui.get_fan_points().set_row_data(index as usize, FanPoint { temp: i32::from(temp), speed: i32::from(speed) });
+        }
+    });
+    ui.on_fan_add_point({
+        let (ui, state) = (ui.as_weak(), state.clone());
+        move |x, y| {
+            let Some(ui) = ui.upgrade() else { return };
+            let mut state = state.borrow_mut();
+            let mut points = form_curve(&ui);
+            let (temp, speed) = chart_value(x, y);
+            if insert_curve_point(&mut points, temp, speed, state.fan_floor) {
+                ui.set_fan_points(fan_rows(&points));
+                save(&ui, &mut state);
+            }
+        }
+    });
+    ui.on_fan_remove_point({
+        let (ui, state) = (ui.as_weak(), state.clone());
+        move |index| {
+            let Some(ui) = ui.upgrade() else { return };
+            let mut points = form_curve(&ui);
+            if remove_curve_point(&mut points, index as usize) {
+                ui.set_fan_points(fan_rows(&points));
+                save(&ui, &mut state.borrow_mut());
             }
         }
     });
@@ -460,8 +622,9 @@ pub fn run(path: PathBuf) {
         let (ui, state) = (ui.as_weak(), state.clone());
         move || {
             let Some(ui) = ui.upgrade() else { return };
-            ui.set_sensor_installed(crate::cpu_temp::service_installed());
+            ui.set_sensor_installed(sensor_ready());
             let Ok(mut state) = state.try_borrow_mut() else { return };
+            refresh_fan_service(&ui, &mut state);
             if stamp_of(&state.path) != state.stamp {
                 reload(&ui, &mut state);
             }
@@ -477,11 +640,51 @@ mod tests {
 
     #[test]
     fn install_command_targets_this_release_and_survives_quoting() {
-        let command = install_command("1.2.3");
+        let command = install_command("1.2.3", "-InstallFanControl");
         assert!(command.contains("/releases/download/v1.2.3/install.ps1"));
-        assert!(command.contains("-InstallCpuTemp -Version 1.2.3"));
+        assert!(command.contains("-InstallFanControl -Version 1.2.3"));
         // It travels inside a double-quoted -Command argument.
         assert!(!command.contains('"'));
+    }
+
+    #[test]
+    fn dragged_points_stay_between_their_neighbors() {
+        let mut points = vec![[50, 30], [60, 40], [70, 60]];
+        move_curve_point(&mut points, 1, 80, 90, 30);
+        assert_eq!(points[1], [69, 60]);
+        move_curve_point(&mut points, 1, 10, 0, 30);
+        assert_eq!(points[1], [51, 30]);
+    }
+
+    #[test]
+    fn dragged_points_respect_the_speed_the_card_accepts() {
+        let mut points = vec![[50, 30], [60, 40]];
+        move_curve_point(&mut points, 0, 50, 5, 30);
+        assert_eq!(points[0], [50, 30]);
+    }
+
+    #[test]
+    fn new_points_land_in_order_and_stay_valid() {
+        let mut points = vec![[50, 30], [70, 60]];
+        assert!(insert_curve_point(&mut points, 60, 95, 30));
+        assert_eq!(points, vec![[50, 30], [60, 60], [70, 60]]);
+        assert!(!insert_curve_point(&mut points, 60, 50, 30));
+        assert!(!insert_curve_point(&mut points, 90, 50, 30));
+        assert!(crate::sensor_shared::curve_error(&points).is_none());
+    }
+
+    #[test]
+    fn a_full_curve_takes_no_more_points_and_a_minimal_one_loses_none() {
+        let mut points: Vec<CurvePoint> = (0..MAX_CURVE_POINTS as u8).map(|i| [40 + i, 30 + i]).collect();
+        assert!(!insert_curve_point(&mut points, 80, 90, 30));
+        let mut minimal = vec![[50, 30], [60, 40]];
+        assert!(!remove_curve_point(&mut minimal, 0));
+    }
+
+    #[test]
+    fn chart_edges_map_to_the_axis_limits() {
+        assert_eq!(chart_value(0.0, 1.0), (20, 0));
+        assert_eq!(chart_value(1.0, 0.0), (90, 100));
     }
 
     fn strings(values: &[&str]) -> Vec<String> {

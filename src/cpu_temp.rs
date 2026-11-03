@@ -5,6 +5,7 @@ use crate::sensor_shared::{decode, MAPPING_NAME, MAPPING_SIZE, SERVICE_NAME};
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS};
+use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
 use windows_sys::Win32::System::Services::{CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS};
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
@@ -24,6 +25,25 @@ pub fn service_installed() -> bool {
         CloseServiceHandle(manager);
         installed
     }
+}
+
+/// The service can also be installed just for the GPU fans, without this driver.
+pub fn pawnio_installed() -> bool {
+    let key = crate::wide(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO");
+    let value = crate::wide("DisplayVersion");
+    let mut bytes = 0;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut bytes,
+        )
+    };
+    status == 0
 }
 
 struct View {

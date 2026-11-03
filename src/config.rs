@@ -1,4 +1,5 @@
 use crate::metrics::Metric;
+use crate::sensor_shared::{curve_error, CurvePoint};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -49,6 +50,27 @@ fn enabled_true() -> bool {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct GpuFan {
+    pub enabled: bool,
+    /// `[temperature in C, fan percent]`. Below the first point the card decides.
+    pub points: Vec<CurvePoint>,
+}
+
+impl Default for GpuFan {
+    fn default() -> Self {
+        GpuFan { enabled: false, points: vec![[50, 30], [60, 40], [70, 60], [80, 80], [85, 100]] }
+    }
+}
+
+impl GpuFan {
+    /// The curve the service should follow, if any.
+    pub fn active_curve(&self) -> Option<Vec<CurvePoint>> {
+        self.enabled.then(|| self.points.clone())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// Sampling period in milliseconds.
     pub interval_ms: u64,
@@ -72,6 +94,7 @@ pub struct Config {
     pub background: String,
     /// Case-insensitive part of an adapter name. Empty sums all physical ones.
     pub adapter: String,
+    pub gpu_fan: GpuFan,
     pub items: Vec<Item>,
 }
 
@@ -90,6 +113,7 @@ impl Default for Config {
             text_color: "auto".into(),
             background: "transparent".into(),
             adapter: String::new(),
+            gpu_fan: GpuFan::default(),
             items: Metric::ALL.iter().map(|&metric| Item { metric, enabled: metric.default_enabled(), label: None, color: None }).collect(),
         }
     }
@@ -114,6 +138,9 @@ impl Config {
         if self.background != "transparent" {
             Rgba::parse(&self.background)?;
         }
+        if let Some(error) = curve_error(&self.gpu_fan.points) {
+            return Err(error);
+        }
         let mut seen = Vec::new();
         self.items.retain(|item| {
             let fresh = !seen.contains(&item.metric);
@@ -134,7 +161,8 @@ impl Config {
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        // Not the pretty form, which puts every number of the fan curve on its own line.
+        let text = toml::to_string(self).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -227,6 +255,7 @@ mod tests {
     #[test]
     fn invalid_values_are_rejected() {
         assert!(Config::parse("text_color = \"azul\"").is_err());
+        assert!(Config::parse("[gpu_fan]\npoints = [[50, 40], [60, 30]]").is_err());
         assert!(Config::parse("unknown_key = 1").is_err());
         assert!(Config::parse("[[items]]\nmetric = \"fan_speed\"").is_err());
         assert!(Config::parse("[[items]]\nmetric = \"cpu\"\ncolor = \"#12\"").is_err());

@@ -21,6 +21,12 @@ remove them from an elevated PowerShell, which leaves the app itself untouched:
     & ([scriptblock]::Create((irm https://github.com/__REPO__/releases/latest/download/install.ps1))) -InstallCpuTemp
     & ([scriptblock]::Create((irm https://github.com/__REPO__/releases/latest/download/install.ps1))) -UninstallCpuTemp
 
+The optional GPU fan curve needs only the service, without PawnIO. It is the same
+service, so removing it turns off both features:
+
+    & ([scriptblock]::Create((irm https://github.com/__REPO__/releases/latest/download/install.ps1))) -InstallFanControl
+    & ([scriptblock]::Create((irm https://github.com/__REPO__/releases/latest/download/install.ps1))) -UninstallFanControl
+
 This script must keep working in Windows PowerShell 5.1, must never call `exit`
 (that would close the user's shell under `irm | iex`), and must verify checksums
 before installing.
@@ -34,6 +40,10 @@ param(
     [switch]$InstallCpuTemp,
     # Remove that service. PawnIO stays, because other programs may rely on it. Needs elevation.
     [switch]$UninstallCpuTemp,
+    # Install only the service, which is all the GPU fan curve needs. Needs elevation.
+    [switch]$InstallFanControl,
+    # Remove the service, as -UninstallCpuTemp does. Needs elevation.
+    [switch]$UninstallFanControl,
     # GitHub repository (owner/name) to install from. Filled in when the
     # script is published with a release.
     [string]$Repo = '__REPO__',
@@ -51,6 +61,7 @@ $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Open Hardware 
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 
 $serviceName = 'OpenHardwareInfoSensor'
+$serviceDescription = 'Reads the CPU temperature and applies the GPU fan curve for Open Hardware Info.'
 $sensorExeName = 'ohi-sensor.exe'
 # This service runs as SYSTEM, so its binary must never be in a user-writable folder.
 $sensorDir = Join-Path $env:ProgramFiles 'OpenHardwareInfo'
@@ -122,8 +133,10 @@ function Register-Sensor([string]$Exe) {
     if (-not (Get-Service $serviceName -ErrorAction SilentlyContinue)) {
         # The quotes matter: an unquoted path with spaces lets Windows run C:\Program.exe.
         New-Service -Name $serviceName -BinaryPathName "`"$Exe`"" -DisplayName 'Open Hardware Info Sensor' `
-            -Description 'Reads the CPU temperature for Open Hardware Info.' -StartupType Automatic | Out-Null
+            -Description $serviceDescription -StartupType Automatic | Out-Null
     }
+    # An older install has the previous description.
+    & sc.exe description $serviceName $serviceDescription | Out-Null
     # Drop every privilege the service does not need, and restart it if it crashes.
     & sc.exe privs $serviceName 'SeCreateGlobalPrivilege/SeChangeNotifyPrivilege' | Out-Null
     if ($LASTEXITCODE) { throw "Could not restrict the service's privileges (sc.exe code $LASTEXITCODE)." }
@@ -166,20 +179,21 @@ function Get-Package([string]$Destination) {
     return $zipPath
 }
 
-$changesSensor = $InstallCpuTemp -or $UninstallCpuTemp
-if ($changesSensor -and -not (Test-Elevated)) {
-    throw 'The CPU temperature options need an elevated PowerShell (Run as administrator).'
+$installsService = $InstallCpuTemp -or $InstallFanControl
+$removesService = $UninstallCpuTemp -or $UninstallFanControl
+if (($installsService -or $removesService) -and -not (Test-Elevated)) {
+    throw 'The CPU temperature and fan control options need an elevated PowerShell (Run as administrator).'
 }
 
 # Files that will run elevated stay out of %TEMP%, where any unelevated program
 # could replace them after the checksum is verified.
-$workRoot = if ($InstallCpuTemp) { $sensorDir } else { $env:TEMP }
+$workRoot = if ($installsService) { $sensorDir } else { $env:TEMP }
 $work = Join-Path $workRoot ("open-hardware-info-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $work -Force | Out-Null
 
 try {
-    if ($UninstallCpuTemp) {
-        Write-Step 'Removing the CPU temperature service'
+    if ($removesService) {
+        Write-Step 'Removing the service behind the CPU temperature and the fan curve'
         Stop-Sensor
         if (Get-Service $serviceName -ErrorAction SilentlyContinue) {
             & sc.exe delete $serviceName | Out-Null
@@ -190,8 +204,8 @@ try {
         return
     }
 
-    if ($InstallCpuTemp) {
-        Install-PawnIo $work
+    if ($installsService) {
+        if ($InstallCpuTemp) { Install-PawnIo $work }
         $zipPath = Get-Package $work
         $files = Join-Path $work 'files'
         Expand-Archive $zipPath $files
@@ -204,7 +218,7 @@ try {
         Copy-Item $source $sensorExe -Force
         Register-Sensor $sensorExe
         Start-Service $serviceName
-        Write-Step 'The service is running. Turn on "Temperatura da CPU" in the app settings.'
+        Write-Step $(if ($InstallCpuTemp) { 'The service is running. Turn on "Temperatura da CPU" in the app settings.' } else { 'The service is running. Turn on the curve in the Fans tab of the app settings.' })
         return
     }
 
@@ -221,7 +235,7 @@ try {
         Remove-Item $InstallDir -Recurse -Force
         Write-Step 'Open Hardware Info was removed. Your settings remain in %APPDATA%\OpenHardwareInfo.'
         if (Get-Service $serviceName -ErrorAction SilentlyContinue) {
-            Write-Warning 'The CPU temperature service is still installed. Remove it from an elevated PowerShell with -UninstallCpuTemp.'
+            Write-Warning 'The service behind the CPU temperature and the fan curve is still installed. Remove it from an elevated PowerShell with -UninstallCpuTemp.'
         }
         return
     }
